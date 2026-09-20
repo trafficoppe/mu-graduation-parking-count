@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ไอคอนลานจอดรถ">
+  <rect width="512" height="512" rx="96" fill="#1f3c88"/>
+  <rect x="96" y="96" width="320" height="320" rx="48" fill="#c8a044"/>
+  <path d="M214 160h68c48 0 80 30 80 76s-32 78-80 78h-30v78h-38V160zm38 42v70h28c25 0 40-13 40-35s-15-35-40-35h-28z" fill="#152a5e"/>
+</svg>

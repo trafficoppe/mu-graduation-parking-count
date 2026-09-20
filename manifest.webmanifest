@@ -1,0 +1,21 @@
+{
+  "name": "ระบบบันทึกจำนวนรถยนต์ลานจอดรถ",
+  "short_name": "บันทึกลานจอด",
+  "description": "ระบบบันทึกจำนวนรถยนต์ลานจอดรถ ช่วงงานพิธีพระราชทานปริญญาบัตร",
+  "lang": "th",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6fb",
+  "theme_color": "#1f3c88",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

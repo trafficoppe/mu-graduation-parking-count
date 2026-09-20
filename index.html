@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f3c88">
+<meta name="description" content="ระบบบันทึกจำนวนรถยนต์ลานจอดรถ ช่วงงานพิธีพระราชทานปริญญาบัตร">
+<title>ระบบบันทึกจำนวนรถยนต์ลานจอดรถ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="wrap">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">P</div>
+      <div class="brand-text">
+        <h1>ระบบบันทึกจำนวนรถยนต์ลานจอดรถ</h1>
+        <p id="header-sub">ช่วงงานพิธีพระราชทานปริญญาบัตร</p>
+      </div>
+    </div>
+    <div class="header-meta">
+      <div class="meta-item">
+        <span class="meta-label">วันงานปัจจุบัน</span>
+        <span class="meta-value" id="header-event">กำลังโหลด...</span>
+      </div>
+      <div class="status-badge" id="conn-status" role="status" aria-live="polite">
+        <span class="dot"></span><span id="conn-text">กำลังตรวจสอบการเชื่อมต่อ</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="app-nav" aria-label="เมนูหลัก">
+  <div class="wrap nav-inner">
+    <button class="nav-btn active" data-view="record" type="button">บันทึกข้อมูล</button>
+    <button class="nav-btn" data-view="latest" type="button">ข้อมูลล่าสุด</button>
+    <button class="nav-btn" data-view="dashboard" type="button">แดชบอร์ด</button>
+    <button class="nav-btn" data-view="admin" type="button">ผู้ดูแลระบบ</button>
+  </div>
+</nav>
+
+<main class="wrap" id="main">
+
+  <!-- ============ หน้าบันทึกข้อมูล ============ -->
+  <section id="view-record" class="view active" aria-labelledby="rec-title">
+    <div id="setup-warning" class="alert alert-error hidden">
+      <strong>ยังไม่ได้ตั้งค่าระบบ</strong>
+      <p>ไฟล์ <code>config.js</code> ยังไม่ได้ระบุที่อยู่ของระบบหลังบ้าน (API URL) กรุณาติดต่อผู้ดูแลระบบ</p>
+    </div>
+
+    <div class="card" id="form-card">
+      <h2 id="rec-title" class="card-title">บันทึกจำนวนรถยนต์</h2>
+
+      <form id="record-form" novalidate autocomplete="on">
+        <div class="field">
+          <label for="f-year">ปีของงาน (พ.ศ.)</label>
+          <select id="f-year" name="year" class="input"></select>
+        </div>
+
+        <div class="field">
+          <label for="f-event">เลือกวันงาน <span class="req" aria-hidden="true">*</span></label>
+          <select id="f-event" name="event" class="input" required aria-required="true"></select>
+          <p class="hint" id="f-event-date">—</p>
+        </div>
+
+        <div class="field">
+          <label for="f-parking-search">เลือกลานจอดรถ <span class="req" aria-hidden="true">*</span></label>
+          <div class="combo" id="parking-combo">
+            <input type="text" id="f-parking-search" class="input" role="combobox"
+                   aria-expanded="false" aria-controls="parking-listbox" aria-autocomplete="list"
+                   placeholder="พิมพ์ลำดับ ชื่อลาน หรือโซน เช่น 24 / อาคารเจรจา / Zone E"
+                   autocomplete="off" required aria-required="true">
+            <button type="button" class="combo-clear hidden" id="parking-clear"
+                    aria-label="ล้างลานจอดที่เลือก">ล้าง</button>
+            <ul id="parking-listbox" class="combo-list hidden" role="listbox"
+                aria-label="รายการลานจอดรถ"></ul>
+          </div>
+          <input type="hidden" id="f-parking-id" name="parkingId">
+          <div id="parking-info" class="parking-info hidden" aria-live="polite"></div>
+        </div>
+
+        <div class="field">
+          <label for="f-count">จำนวนรถยนต์ที่ตรวจนับได้ (คัน) <span class="req" aria-hidden="true">*</span></label>
+          <input type="text" id="f-count" name="vehicleCount" class="input input-number"
+                 inputmode="numeric" pattern="[0-9]*" placeholder="0" required aria-required="true"
+                 autocomplete="off">
+          <p class="hint" id="capacity-warning"></p>
+        </div>
+
+        <div class="field">
+          <label for="f-name">ชื่อ-นามสกุลผู้บันทึก <span class="req" aria-hidden="true">*</span></label>
+          <input type="text" id="f-name" name="recorderName" class="input"
+                 placeholder="เช่น นายสมชาย ใจดี" required aria-required="true"
+                 autocomplete="name" maxlength="120">
+        </div>
+
+        <div class="field">
+          <label for="f-phone">เบอร์โทรศัพท์ <span class="optional">(ไม่บังคับ)</span></label>
+          <input type="tel" id="f-phone" name="phone" class="input" inputmode="tel"
+                 placeholder="0812345678" autocomplete="tel" maxlength="20">
+        </div>
+
+        <div class="field">
+          <label for="f-email">อีเมล <span class="req" aria-hidden="true">*</span></label>
+          <input type="email" id="f-email" name="email" class="input" inputmode="email"
+                 placeholder="name@mahidol.ac.th" required aria-required="true"
+                 autocomplete="email" maxlength="150">
+        </div>
+
+        <div class="field">
+          <label for="f-note">หมายเหตุ <span class="optional">(ไม่บังคับ)</span></label>
+          <textarea id="f-note" name="note" class="input" rows="2" maxlength="500"
+                    placeholder="เช่น ตรวจนับรอบ 10:00 น."></textarea>
+        </div>
+
+        <div class="checks">
+          <label class="check">
+            <input type="checkbox" id="f-remember">
+            <span>จำข้อมูลผู้กรอกในอุปกรณ์นี้</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="f-continuous">
+            <span>บันทึกต่อเนื่อง (เก็บข้อมูลผู้กรอกไว้ บันทึกลานถัดไปได้ทันที)</span>
+          </label>
+        </div>
+
+        <div id="form-error" class="alert alert-error hidden" role="alert"></div>
+
+        <button type="submit" id="btn-submit" class="btn btn-primary btn-lg">บันทึกข้อมูล</button>
+
+        <p class="privacy">
+          ข้อมูลชื่อ-นามสกุล เบอร์โทรศัพท์ และอีเมล ใช้สำหรับการตรวจสอบและติดตามการบันทึกข้อมูลของระบบ
+        </p>
+      </form>
+    </div>
+
+    <!-- การ์ดแสดงผลสำเร็จ -->
+    <div class="card success-card hidden" id="success-card" role="status" aria-live="polite">
+      <div class="success-head">
+        <span class="success-icon" aria-hidden="true">✓</span>
+        <h2>บันทึกข้อมูลสำเร็จ</h2>
+      </div>
+      <dl class="success-list" id="success-list"></dl>
+      <button type="button" class="btn btn-primary btn-lg" id="btn-next">บันทึกข้อมูลลานต่อไป</button>
+      <button type="button" class="btn btn-ghost" id="btn-view-latest">ดูข้อมูลล่าสุดทั้งหมด</button>
+    </div>
+  </section>
+
+  <!-- ============ หน้าข้อมูลล่าสุด ============ -->
+  <section id="view-latest" class="view" aria-labelledby="latest-title">
+    <div class="card">
+      <h2 id="latest-title" class="card-title">ข้อมูลล่าสุดของแต่ละลาน</h2>
+      <div class="filter-row">
+        <div class="field">
+          <label for="l-year">ปี (พ.ศ.)</label>
+          <select id="l-year" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="l-event">วันงาน</label>
+          <select id="l-event" class="input"></select>
+        </div>
+        <div class="field field-btn">
+          <button type="button" class="btn btn-secondary" id="btn-latest-refresh">รีเฟรชข้อมูล</button>
+        </div>
+      </div>
+      <p class="hint" id="latest-meta">—</p>
+      <div class="field">
+        <label for="l-search" class="sr-only">ค้นหาลานจอด</label>
+        <input type="text" id="l-search" class="input" placeholder="ค้นหาลานจอด / โซน">
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="latest-table">
+          <thead>
+            <tr>
+              <th scope="col">ลาน</th>
+              <th scope="col" class="num">ความจุ</th>
+              <th scope="col" class="num">จำนวนรถล่าสุด</th>
+              <th scope="col" class="num">การใช้พื้นที่</th>
+              <th scope="col">อัปเดตล่าสุด</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn-ghost" id="btn-export-latest">ส่งออก CSV (ข้อมูลล่าสุด)</button>
+    </div>
+  </section>
+
+  <!-- ============ หน้าแดชบอร์ด ============ -->
+  <section id="view-dashboard" class="view" aria-labelledby="dash-title">
+    <div class="card">
+      <h2 id="dash-title" class="card-title">แดชบอร์ดสรุปภาพรวม</h2>
+      <div class="filter-row">
+        <div class="field">
+          <label for="d-year">ปี (พ.ศ.)</label>
+          <select id="d-year" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="d-event">วันงาน</label>
+          <select id="d-event" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="d-zone">โซน</label>
+          <select id="d-zone" class="input"><option value="">ทุกโซน</option></select>
+        </div>
+        <div class="field">
+          <label for="d-parking">ลานจอด</label>
+          <select id="d-parking" class="input"><option value="">ทุกลาน</option></select>
+        </div>
+        <div class="field field-btn">
+          <button type="button" class="btn btn-secondary" id="btn-dash-refresh">รีเฟรชข้อมูล</button>
+        </div>
+      </div>
+      <p class="hint" id="dash-meta">—</p>
+    </div>
+
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <div class="card">
+      <h3 class="card-title">สถานะรายลานจอด</h3>
+      <div class="table-scroll">
+        <table class="data-table" id="dash-table">
+          <thead>
+            <tr>
+              <th scope="col">ลาน</th>
+              <th scope="col">โซน</th>
+              <th scope="col" class="num">ความจุ</th>
+              <th scope="col" class="num">จำนวนรถล่าสุด</th>
+              <th scope="col" class="num">การใช้พื้นที่</th>
+              <th scope="col">อัปเดตล่าสุด</th>
+              <th scope="col">สถานะ</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn-ghost" id="btn-export-dash">ส่งออก CSV (สรุปสถานะ)</button>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3 class="card-title">อันดับจำนวนรถสูงสุด</h3>
+        <ol class="rank-list" id="rank-count"></ol>
+      </div>
+      <div class="card">
+        <h3 class="card-title">อันดับการใช้พื้นที่สูงสุด</h3>
+        <ol class="rank-list" id="rank-util"></ol>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">สรุปตามโซน</h3>
+      <div class="table-scroll">
+        <table class="data-table" id="zone-table">
+          <thead>
+            <tr>
+              <th scope="col">โซน</th>
+              <th scope="col" class="num">จำนวนลาน</th>
+              <th scope="col" class="num">รายงานแล้ว</th>
+              <th scope="col" class="num">ความจุ</th>
+              <th scope="col" class="num">จำนวนรถ</th>
+              <th scope="col" class="num">การใช้พื้นที่</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">แนวโน้มจำนวนรถตามช่วงเวลา</h3>
+      <div class="filter-row">
+        <div class="field">
+          <label for="d-interval">ช่วงเวลา</label>
+          <select id="d-interval" class="input">
+            <option value="30">ทุก 30 นาที</option>
+            <option value="60" selected>ทุก 1 ชั่วโมง</option>
+            <option value="120">ทุก 2 ชั่วโมง</option>
+          </select>
+        </div>
+      </div>
+      <p class="hint">
+        ตัวเลขแต่ละช่วงเวลา นับเฉพาะลานที่มีการบันทึกข้อมูลแล้ว ณ ช่วงเวลานั้น
+        จำนวนลานที่นับรวมแสดงกำกับไว้ใต้แต่ละแท่ง
+      </p>
+      <div id="trend-chart" class="trend-chart"></div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">ลานที่ยังไม่มีข้อมูลล่าสุด</h3>
+      <ul class="pill-list" id="not-reported"></ul>
+    </div>
+  </section>
+
+  <!-- ============ หน้าผู้ดูแลระบบ ============ -->
+  <section id="view-admin" class="view" aria-labelledby="admin-title">
+    <div class="card" id="admin-login-card">
+      <h2 id="admin-title" class="card-title">เข้าสู่ระบบผู้ดูแล</h2>
+      <p class="hint">
+        ส่วนนี้สำหรับผู้ดูแลระบบเท่านั้น ประกอบด้วยประวัติการบันทึก ข้อมูลผู้กรอก
+        และการตั้งค่าลานจอด/ปีงาน
+      </p>
+      <div class="field">
+        <label for="a-token">รหัสผู้ดูแลระบบ</label>
+        <input type="password" id="a-token" class="input" autocomplete="current-password"
+               placeholder="กรอกรหัสที่ได้รับจากผู้ดูแลระบบ">
+      </div>
+      <div id="admin-error" class="alert alert-error hidden" role="alert"></div>
+      <button type="button" class="btn btn-primary btn-lg" id="btn-admin-login">เข้าสู่ระบบ</button>
+      <p class="privacy">
+        รหัสนี้เป็นรหัสร่วมของหน่วยงาน (Shared Secret) ใช้เพื่อจำกัดการเข้าถึงเมนูผู้ดูแล
+        ไม่ใช่การยืนยันตัวบุคคลรายคน หากต้องการความปลอดภัยสูงกว่านี้
+        ให้ผู้ดูแลระบบ Deploy Web App ชุดที่สองแบบจำกัดเฉพาะบัญชีในองค์กร
+      </p>
+    </div>
+
+    <div id="admin-panel" class="hidden">
+      <div class="card">
+        <div class="admin-head">
+          <h2 class="card-title">เมนูผู้ดูแลระบบ</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-admin-logout">ออกจากระบบผู้ดูแล</button>
+        </div>
+        <div class="tab-row" role="tablist">
+          <button class="tab-btn active" data-tab="history" role="tab" type="button">ประวัติการบันทึก</button>
+          <button class="tab-btn" data-tab="parking" role="tab" type="button">จัดการลานจอด</button>
+          <button class="tab-btn" data-tab="events" role="tab" type="button">จัดการวันงาน</button>
+          <button class="tab-btn" data-tab="year" role="tab" type="button">จัดการปี</button>
+          <button class="tab-btn" data-tab="system" role="tab" type="button">ระบบ</button>
+        </div>
+      </div>
+
+      <!-- ประวัติ -->
+      <div class="card admin-tab" id="tab-history">
+        <h3 class="card-title">ประวัติการบันทึก</h3>
+        <div class="filter-row">
+          <div class="field">
+            <label for="h-year">ปี (พ.ศ.)</label>
+            <select id="h-year" class="input"></select>
+          </div>
+          <div class="field">
+            <label for="h-event">วันงาน</label>
+            <select id="h-event" class="input"><option value="">ทุกวันงาน</option></select>
+          </div>
+          <div class="field">
+            <label for="h-parking">ลานจอด</label>
+            <select id="h-parking" class="input"><option value="">ทุกลาน</option></select>
+          </div>
+          <div class="field">
+            <label for="h-zone">โซน</label>
+            <select id="h-zone" class="input"><option value="">ทุกโซน</option></select>
+          </div>
+          <div class="field">
+            <label for="h-recorder">ผู้บันทึก / อีเมล</label>
+            <input type="text" id="h-recorder" class="input" placeholder="พิมพ์บางส่วนของชื่อหรืออีเมล">
+          </div>
+          <div class="field">
+            <label for="h-date-from">วันที่ตั้งแต่</label>
+            <input type="date" id="h-date-from" class="input">
+          </div>
+          <div class="field">
+            <label for="h-date-to">ถึงวันที่</label>
+            <input type="date" id="h-date-to" class="input">
+          </div>
+          <div class="field">
+            <label for="h-time-from">เวลาตั้งแต่</label>
+            <input type="time" id="h-time-from" class="input">
+          </div>
+          <div class="field">
+            <label for="h-time-to">ถึงเวลา</label>
+            <input type="time" id="h-time-to" class="input">
+          </div>
+          <div class="field field-btn">
+            <button type="button" class="btn btn-secondary" id="btn-history-search">ค้นหา</button>
+          </div>
+        </div>
+        <p class="hint" id="history-meta">—</p>
+        <div class="table-scroll">
+          <table class="data-table" id="history-table">
+            <thead>
+              <tr>
+                <th scope="col">Record ID</th>
+                <th scope="col">เวลา</th>
+                <th scope="col">ลาน</th>
+                <th scope="col" class="num">จำนวนรถ</th>
+                <th scope="col">ผู้บันทึก</th>
+                <th scope="col">อีเมล</th>
+                <th scope="col">เบอร์โทร</th>
+                <th scope="col">หมายเหตุ</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <button type="button" class="btn btn-ghost" id="btn-export-history">ส่งออก CSV (ประวัติ)</button>
+      </div>
+
+      <!-- ลานจอด -->
+      <div class="card admin-tab hidden" id="tab-parking">
+        <h3 class="card-title">จัดการลานจอด</h3>
+        <div class="filter-row">
+          <div class="field">
+            <label for="p-year">ปี (พ.ศ.)</label>
+            <select id="p-year" class="input"></select>
+          </div>
+          <div class="field field-btn">
+            <button type="button" class="btn btn-secondary" id="btn-parking-refresh">โหลดรายการ</button>
+          </div>
+        </div>
+
+        <details class="panel">
+          <summary>เพิ่มลานจอดใหม่</summary>
+          <div class="field">
+            <label for="np-name">ชื่อลานจอด</label>
+            <input type="text" id="np-name" class="input" maxlength="200">
+          </div>
+          <div class="field">
+            <label for="np-zone">โซน</label>
+            <input type="text" id="np-zone" class="input" placeholder="เช่น F หรือ ไม่กำกับโซน" maxlength="40">
+          </div>
+          <div class="field">
+            <label for="np-capacity">ความจุ (คัน)</label>
+            <input type="text" id="np-capacity" class="input" inputmode="numeric" placeholder="0">
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-add-parking">เพิ่มลานจอด</button>
+          <p class="hint">ระบบจะกำหนดลำดับลานถัดไปให้อัตโนมัติ และไม่นำเลขที่เคยยกเลิกกลับมาใช้ซ้ำ</p>
+        </details>
+
+        <details class="panel">
+          <summary>ตั้งค่าลานจอดเฉพาะวันงาน (เปิด/ปิด หรือกำหนดความจุเฉพาะวัน)</summary>
+          <p class="hint">
+            ใช้เมื่อบางลานเปิดเฉพาะบางวัน หรือมีความจุต่างจากค่าปกติในวันนั้น
+            หากไม่กำหนดความจุเฉพาะวัน ระบบจะใช้ความจุจากข้อมูลหลักของลาน
+          </p>
+          <div class="field">
+            <label for="dc-event">วันงาน</label>
+            <select id="dc-event" class="input"></select>
+          </div>
+          <div class="field">
+            <label for="dc-parking">ลานจอด</label>
+            <select id="dc-parking" class="input"></select>
+          </div>
+          <div class="field">
+            <label for="dc-open">สถานะในวันงานนี้</label>
+            <select id="dc-open" class="input">
+              <option value="true">เปิดใช้งาน</option>
+              <option value="false">ปิดใช้งานเฉพาะวันนี้</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="dc-capacity">ความจุเฉพาะวันนี้ (เว้นว่างเพื่อใช้ค่าปกติ)</label>
+            <input type="text" id="dc-capacity" class="input" inputmode="numeric" placeholder="เช่น 500">
+          </div>
+          <div class="field">
+            <label for="dc-note">หมายเหตุ</label>
+            <input type="text" id="dc-note" class="input" maxlength="200">
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-day-config">บันทึกการตั้งค่าเฉพาะวัน</button>
+        </details>
+
+        <div class="table-scroll">
+          <table class="data-table" id="parking-table">
+            <thead>
+              <tr>
+                <th scope="col">ลำดับ</th>
+                <th scope="col">รหัส</th>
+                <th scope="col">ชื่อลาน</th>
+                <th scope="col">โซน</th>
+                <th scope="col" class="num">ความจุ</th>
+                <th scope="col">สถานะ</th>
+                <th scope="col">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- วันงาน -->
+      <div class="card admin-tab hidden" id="tab-events">
+        <h3 class="card-title">จัดการวันงาน</h3>
+        <div class="filter-row">
+          <div class="field">
+            <label for="e-year">ปี (พ.ศ.)</label>
+            <select id="e-year" class="input"></select>
+          </div>
+          <div class="field field-btn">
+            <button type="button" class="btn btn-secondary" id="btn-events-refresh">โหลดรายการ</button>
+          </div>
+        </div>
+
+        <details class="panel">
+          <summary>เพิ่มวันงานใหม่</summary>
+          <div class="field">
+            <label for="ne-id">รหัสวันงาน</label>
+            <input type="text" id="ne-id" class="input" placeholder="เช่น DAY04" maxlength="30">
+          </div>
+          <div class="field">
+            <label for="ne-name">ชื่อวันงาน</label>
+            <input type="text" id="ne-name" class="input" placeholder="เช่น วันรับจริง (วันที่สาม)" maxlength="120">
+          </div>
+          <div class="field">
+            <label for="ne-date">วันที่ (ค.ศ.)</label>
+            <input type="date" id="ne-date" class="input">
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-add-event">เพิ่มวันงาน</button>
+        </details>
+
+        <div class="table-scroll">
+          <table class="data-table" id="events-table">
+            <thead>
+              <tr>
+                <th scope="col">รหัส</th>
+                <th scope="col">ชื่อวันงาน</th>
+                <th scope="col">วันที่</th>
+                <th scope="col">สถานะ</th>
+                <th scope="col">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- จัดการปี -->
+      <div class="card admin-tab hidden" id="tab-year">
+        <h3 class="card-title">จัดการปีของงาน</h3>
+        <p class="hint">ข้อมูลของแต่ละปีแยกจากกันโดยสมบูรณ์ การแก้ไขข้อมูลปีใหม่ไม่กระทบข้อมูลย้อนหลัง</p>
+
+        <details class="panel" open>
+          <summary>สร้างปีใหม่</summary>
+          <div class="field">
+            <label for="y-target">ปีที่ต้องการสร้าง (พ.ศ.)</label>
+            <input type="text" id="y-target" class="input" inputmode="numeric" placeholder="2570">
+          </div>
+          <div class="field">
+            <label for="y-source">คัดลอกลานจอดจากปี (พ.ศ.)</label>
+            <select id="y-source" class="input"></select>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="y-copy-events">
+            <span>คัดลอกโครงวันงานด้วย (ต้องกำหนดวันที่ใหม่เอง)</span>
+          </label>
+          <button type="button" class="btn btn-primary" id="btn-create-year">สร้างปีใหม่</button>
+        </details>
+
+        <details class="panel">
+          <summary>ตั้งปีที่ใช้งาน (Active Year)</summary>
+          <div class="field">
+            <label for="y-active">ปีที่ใช้งาน</label>
+            <select id="y-active" class="input"></select>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-set-active-year">บันทึกปีที่ใช้งาน</button>
+        </details>
+      </div>
+
+      <!-- ระบบ -->
+      <div class="card admin-tab hidden" id="tab-system">
+        <h3 class="card-title">ตรวจสอบระบบ</h3>
+        <button type="button" class="btn btn-secondary" id="btn-health">ตรวจสอบการเชื่อมต่อ (Health Check)</button>
+        <button type="button" class="btn btn-secondary" id="btn-rebuild">สร้างสรุปข้อมูลใหม่</button>
+        <pre class="code-box" id="health-output">ยังไม่ได้ตรวจสอบ</pre>
+
+        <h3 class="card-title">บันทึกการเปลี่ยนแปลง (Audit Log)</h3>
+        <button type="button" class="btn btn-ghost" id="btn-audit">โหลด Audit Log ล่าสุด</button>
+        <div class="table-scroll">
+          <table class="data-table" id="audit-table">
+            <thead>
+              <tr>
+                <th scope="col">เวลา</th>
+                <th scope="col">การกระทำ</th>
+                <th scope="col">ปี</th>
+                <th scope="col">เป้าหมาย</th>
+                <th scope="col">ผู้ดำเนินการ</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="app-footer">
+  <div class="wrap">
+    <p id="footer-org">งานจราจรและความปลอดภัย กองกายภาพและสิ่งแวดล้อม มหาวิทยาลัยมหิดล</p>
+    <p class="version">ระบบบันทึกข้อมูลลานจอดรถ · <span id="footer-version">v1.0.0</span></p>
+  </div>
+</footer>
+
+<div id="toast" class="toast" aria-live="polite"></div>
+<div id="loading-overlay" class="loading-overlay hidden" aria-hidden="true">
+  <div class="spinner" role="status" aria-label="กำลังโหลดข้อมูล"></div>
+</div>
+
+<script src="config.js"></script>
+<script src="utils.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+<script src="dashboard.js"></script>
+<script src="admin.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (e) {
+        console.warn('Service worker registration failed:', e);
+      });
+    });
+  }
+</script>
+</body>
+</html>
