@@ -1,24 +1,42 @@
 /**
  * app.js
  * ตรรกะหลักของหน้าบันทึกข้อมูล + การนำทาง + สถานะร่วมของทั้งระบบ
+ *
+ * หลักการสำคัญของเวอร์ชันนี้:
+ *  - รายการปีและวันงานทั้งหมดมาจากระบบหลังบ้าน ไม่มีการ hard-code ปีหรือวันที่ในไฟล์นี้
+ *  - "บันทึกได้หรือไม่" ตัดสินโดยเซิร์ฟเวอร์เสมอ (ฟิลด์ canRecord / isOpenNow)
+ *    หน้าเว็บเพียงซ่อนหรือปิดปุ่มเพื่อให้ผู้ใช้ไม่สับสน แต่ไม่ใช่ตัวตัดสิน
+ *  - เวลาที่ใช้ตัดสินคือเวลาของเซิร์ฟเวอร์ ไม่ใช่นาฬิกาของเครื่องผู้ใช้
+ *
+ * เวอร์ชัน 1.2.0:
+ *  - ผู้ใช้ต้องลงชื่อเข้าใช้ด้วยบัญชี Google ก่อนบันทึกข้อมูล (ดู auth.js)
+ *  - ไม่มีช่องกรอกอีเมลอีกต่อไป — อีเมลมาจากบัญชีที่ยืนยันแล้วเท่านั้น
+ *  - ปุ่มปีจะถูกปิดใช้งานก็ต่อเมื่อ "สถานะปี = ปิดรับข้อมูล" เท่านั้น
+ *    การที่ยังไม่มีวันงานเปิดรับ ไม่ทำให้ปีนั้นกดไม่ได้ (แก้ semantic จาก 1.1.0)
  */
 var App = (function () {
   'use strict';
 
   var state = {
     config: null,
-    years: [],
+    years: [],            // [{yearBE, status, canRecord, reason, openEventCount, ...}]
     activeYear: APP_CONFIG.DEFAULT_YEAR,
     currentYear: APP_CONFIG.DEFAULT_YEAR,
-    events: [],
+    events: [],           // วันงานของปีที่เลือก (มีฟิลด์ isOpenNow / windowState)
     lots: [],
     selectedLot: null,
+    recordWindow: null,
+    authConfig: null,
+    identity: null,
+    serverTime: '',
     requestId: null,
     submitting: false,
     ready: false
   };
 
   var $ = Utils.$;
+  var statusTimer = null;
+  var authStarted = false;
 
   /* ================= การนำทางระหว่างหน้า ================= */
   function switchView(name) {
@@ -29,6 +47,9 @@ var App = (function () {
       b.classList.toggle('active', b.getAttribute('data-view') === name);
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    if (name === 'record') startStatusRefresh();
+    else stopStatusRefresh();
 
     if (name === 'latest') Dashboard.onEnterLatest();
     if (name === 'dashboard') Dashboard.onEnterDashboard();
@@ -77,30 +98,8 @@ var App = (function () {
     if (eventId) params.eventId = eventId;
 
     return Api.call('getBootstrap', params).then(function (res) {
-      state.config = res.config || {};
-      state.years = (res.config && res.config.years && res.config.years.length)
-        ? res.config.years : [res.yearBE];
-      state.activeYear = (res.config && res.config.activeYear) || res.yearBE;
-      state.currentYear = res.yearBE;
-      state.events = res.events || [];
-      state.lots = res.lots || [];
-      state.ready = true;
-
-      if (res.config) {
-        if (res.config.orgName) {
-          $('#footer-org').textContent = res.config.orgName;
-        }
-        $('#footer-version').textContent = 'v' + (res.config.appVersion || APP_CONFIG.APP_VERSION);
-      }
-
-      renderYearOptions();
-      renderEventOptions(res.defaultEventId);
-      updateHeaderEvent();
-      renderLotList('');
-
-      if (res.warning) {
-        Utils.toast(res.warning, 'warn');
-      }
+      applyBootstrap(res);
+      if (res.warning) Utils.toast(res.warning, 'warn');
       return res;
     }).catch(function (err) {
       var msg = Api.friendlyMessage(err);
@@ -116,48 +115,214 @@ var App = (function () {
     });
   }
 
+  function applyBootstrap(res) {
+    state.config = res.config || {};
+    state.years = res.years || [];
+    if (state.years.length === 0 && res.config && res.config.years) {
+      // เผื่อ Backend รุ่นเก่าที่ยังไม่ส่งรายการปีแบบละเอียด
+      state.years = res.config.years.map(function (y) {
+        return { yearBE: y, status: 'Active', isActive: true, selectable: true,
+                 disabledReason: '', canRecord: true, hasOpenEvent: true,
+                 windowSummary: '', reason: '',
+                 isActiveYear: y === res.config.activeYear, openEventCount: 1, eventCount: 1 };
+      });
+    }
+    state.activeYear = (res.config && res.config.activeYear) || res.yearBE;
+    state.currentYear = res.yearBE;
+    state.events = res.events || [];
+    state.lots = res.lots || [];
+    state.recordWindow = res.recordWindow || null;
+    state.authConfig = res.auth || null;
+    state.serverTime = res.serverTime || '';
+    state.ready = true;
+
+    // เริ่มระบบลงชื่อเข้าใช้ด้วย Client ID ที่ได้จากระบบหลังบ้าน (ตั้งค่าที่เดียว)
+    if (!authStarted && res.auth) {
+      authStarted = true;
+      Auth.init(res.auth.clientId || '');
+    }
+
+    if (res.config) {
+      if (res.config.orgName) $('#footer-org').textContent = res.config.orgName;
+      $('#footer-version').textContent = 'v' + (res.config.appVersion || APP_CONFIG.APP_VERSION);
+    }
+
+    $('#f-year').value = String(state.currentYear);
+    renderYearButtons();
+    renderYearOptions();
+    renderEventButtons(res.defaultEventId);
+    updateHeaderEvent();
+    renderLotList('');
+    updateSelectionCard();
+  }
+
+  /** เติมตัวเลือกปีให้ช่อง select ของหน้าอื่น ๆ (หน้าบันทึกใช้ปุ่มแทน) */
   function renderYearOptions() {
-    var targets = ['#f-year', '#l-year', '#d-year', '#h-year', '#p-year', '#e-year',
-                   '#y-source', '#y-active'];
+    var years = state.years.map(function (y) { return y.yearBE; });
+    if (years.length === 0) years = [state.currentYear];
+
+    var targets = ['#l-year', '#d-year', '#h-year', '#p-year', '#e-year', '#y-source', '#y-active'];
     targets.forEach(function (sel) {
       var node = $(sel);
       if (!node) return;
       var current = node.value;
       node.innerHTML = '';
-      state.years.forEach(function (y) {
+      years.forEach(function (y) {
         var opt = document.createElement('option');
         opt.value = y;
         opt.textContent = y + (y === state.activeYear ? ' (ปีที่ใช้งาน)' : '');
         node.appendChild(opt);
       });
-      node.value = current && state.years.indexOf(Number(current)) >= 0
+      node.value = (current && years.indexOf(Number(current)) >= 0)
         ? current : String(state.currentYear);
     });
   }
 
-  function renderEventOptions(defaultEventId) {
-    var sel = $('#f-event');
-    sel.innerHTML = '';
-    if (state.events.length === 0) {
-      var o = document.createElement('option');
-      o.value = '';
-      o.textContent = 'ยังไม่มีข้อมูลวันงานในปีนี้';
-      sel.appendChild(o);
-      $('#f-event-date').textContent = '—';
+  /* ================= ปุ่มเลือกปี ================= */
+  function renderYearButtons() {
+    var box = $('#year-buttons');
+    box.innerHTML = '';
+
+    if (!state.years.length) {
+      box.appendChild(Utils.el('p', 'choice-empty', 'ยังไม่มีข้อมูลปีในระบบ กรุณาติดต่อผู้ดูแลระบบ'));
+      $('#year-hint').textContent = '';
       return;
     }
-    state.events.forEach(function (ev) {
-      var opt = document.createElement('option');
-      opt.value = ev.eventId;
-      opt.textContent = ev.eventName;
-      sel.appendChild(opt);
+
+    state.years.forEach(function (y) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'choice-btn' + (y.yearBE === state.currentYear ? ' selected' : '');
+      btn.setAttribute('data-year', String(y.yearBE));
+      btn.setAttribute('aria-pressed', y.yearBE === state.currentYear ? 'true' : 'false');
+
+      var main = Utils.el('span', 'cb-main', y.yearBE);
+      btn.appendChild(main);
+
+      // ข้อความประกอบใต้เลขปี: บอกสถานะช่วงเวลาของปีนั้น
+      var subText = y.windowSummary || y.reason || '';
+      btn.appendChild(Utils.el('span', 'cb-sub', subText));
+
+      // *** ปุ่มปีจะกดไม่ได้ก็ต่อเมื่อ "สถานะปี = ปิดรับข้อมูล" เท่านั้น ***
+      // การที่วันนี้ยังไม่มีวันงานเปิดรับ ไม่ได้แปลว่าปีนั้นใช้งานไม่ได้
+      var selectable = (y.selectable !== undefined) ? y.selectable : (y.status === 'Active');
+      if (!selectable) {
+        btn.disabled = true;
+        btn.title = 'ปี ' + y.yearBE + ': ' + (y.disabledReason || 'ปิดรับข้อมูลแล้ว');
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.addEventListener('click', function () { selectYear(y.yearBE); });
+      }
+      box.appendChild(btn);
     });
-    sel.value = defaultEventId || state.events[0].eventId;
+
+    var selectableYears = state.years.filter(function (y) {
+      return (y.selectable !== undefined) ? y.selectable : (y.status === 'Active');
+    });
+    var hint = $('#year-hint');
+    if (selectableYears.length === 0) {
+      hint.textContent = 'ขณะนี้ไม่มีปีที่เปิดรับข้อมูล กรุณาติดต่อผู้ดูแลระบบ';
+      hint.className = 'hint warn';
+    } else {
+      hint.textContent = 'ปุ่มสีจางคือปีที่ผู้ดูแลระบบปิดรับข้อมูลแล้ว';
+      hint.className = 'hint';
+    }
+  }
+
+  function selectYear(yearBE) {
+    if (Number(yearBE) === Number(state.currentYear)) return;
+    $('#f-year').value = String(yearBE);
+    clearSelectedLot();
+    bootstrap(Number(yearBE), '').catch(function () {});
+  }
+
+  /* ================= ปุ่มเลือกวันงาน ================= */
+  /** แสดงเฉพาะวันงานที่เซิร์ฟเวอร์ระบุว่าบันทึกได้ ณ ขณะนี้ */
+  function openEvents() {
+    return state.events.filter(function (e) { return e.isOpenNow; });
+  }
+
+  function renderEventButtons(preferredId) {
+    var box = $('#event-buttons');
+    box.innerHTML = '';
+    var open = openEvents();
+
+    if (open.length === 0) {
+      var msg = 'ขณะนี้ไม่มีวันงานที่เปิดให้บันทึกข้อมูล';
+      var upcoming = state.events.filter(function (e) { return e.windowState === 'BEFORE'; });
+      if (upcoming.length) {
+        msg = 'ยังไม่ถึงช่วงเวลาบันทึก ระบบจะเปิดให้บันทึก ' +
+          upcoming[0].eventName + ' ตั้งแต่ ' + formatWindowTime(upcoming[0].opensAt) + ' เป็นต้นไป';
+      } else if (state.events.length) {
+        msg = 'พ้นช่วงเวลาบันทึกของทุกวันงานในปีนี้แล้ว';
+      }
+      box.appendChild(Utils.el('p', 'choice-empty', msg));
+      $('#f-event').value = '';
+      $('#f-event-date').textContent = '—';
+      updateSubmitAvailability();
+      return;
+    }
+
+    var chosen = '';
+    if (preferredId && open.some(function (e) { return e.eventId === preferredId; })) {
+      chosen = preferredId;
+    } else if ($('#f-event').value &&
+               open.some(function (e) { return e.eventId === $('#f-event').value; })) {
+      chosen = $('#f-event').value;
+    } else {
+      chosen = open[0].eventId;
+    }
+
+    open.forEach(function (ev) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'choice-btn' + (ev.eventId === chosen ? ' selected' : '');
+      btn.setAttribute('data-event', ev.eventId);
+      btn.setAttribute('aria-pressed', ev.eventId === chosen ? 'true' : 'false');
+      btn.appendChild(Utils.el('span', 'cb-main', ev.eventName));
+      btn.appendChild(Utils.el('span', 'cb-sub', Utils.formatThaiDate(ev.eventDate) +
+        ' · ปิดรับ ' + formatWindowTime(ev.closesAt)));
+      btn.addEventListener('click', function () { selectEvent(ev.eventId); });
+      box.appendChild(btn);
+    });
+
+    if ($('#f-event').value !== chosen) {
+      $('#f-event').value = chosen;
+      reloadLots();
+    } else {
+      $('#f-event').value = chosen;
+    }
     updateEventDate();
+    updateSubmitAvailability();
+  }
+
+  function selectEvent(eventId) {
+    if ($('#f-event').value === eventId) return;
+    $('#f-event').value = eventId;
+    Utils.$$('#event-buttons .choice-btn').forEach(function (b) {
+      var on = b.getAttribute('data-event') === eventId;
+      b.classList.toggle('selected', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    updateEventDate();
+    updateHeaderEvent();
+    updateSelectionCard();
+    reloadLots();
+  }
+
+  /** 'YYYY-MM-DD HH:mm' -> 'HH:mm น.' หรือ 'D เดือน ปี HH:mm น.' เมื่อคนละวัน */
+  function formatWindowTime(ts) {
+    if (!ts) return '-';
+    var d = String(ts).substring(0, 10);
+    var t = String(ts).substring(11, 16);
+    var ev = currentEvent();
+    if (ev && ev.eventDate === d) return t + ' น.';
+    return Utils.formatThaiDate(d) + ' ' + t + ' น.';
   }
 
   function currentEvent() {
     var id = $('#f-event').value;
+    if (!id) return null;
     for (var i = 0; i < state.events.length; i++) {
       if (state.events[i].eventId === id) return state.events[i];
     }
@@ -166,24 +331,110 @@ var App = (function () {
 
   function updateEventDate() {
     var ev = currentEvent();
-    $('#f-event-date').textContent = ev
-      ? 'วันที่ ' + Utils.formatThaiDate(ev.eventDate)
-      : '—';
+    if (!ev) { $('#f-event-date').textContent = '—'; return; }
+    $('#f-event-date').textContent =
+      'วันที่ ' + Utils.formatThaiDate(ev.eventDate) +
+      ' · เปิดรับข้อมูลถึง ' + formatWindowTime(ev.closesAt);
   }
 
   function updateHeaderEvent() {
     var ev = currentEvent();
     $('#header-event').textContent = ev
       ? ev.eventName + ' · ' + Utils.formatThaiDate(ev.eventDate)
-      : 'ยังไม่มีข้อมูลวันงาน';
-    $('#header-sub').textContent =
-      'ช่วงงานพิธีพระราชทานปริญญาบัตร ประจำปี ' + state.currentYear;
+      : 'ยังไม่มีวันงานที่เปิดให้บันทึก';
+  }
+
+  /** เปิด/ปิดปุ่มบันทึกตามความพร้อมของปีและวันงาน */
+  function updateSubmitAvailability() {
+    var btn = $('#btn-submit');
+    if (!Api.isConfigured()) { btn.disabled = true; return; }
+    var hasEvent = !!currentEvent();
+    var signedIn = Auth.isSignedIn();
+    btn.disabled = !hasEvent || !signedIn;
+    btn.title = !signedIn ? 'กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อน'
+      : (!hasEvent ? 'ยังไม่มีวันงานที่เปิดให้บันทึกในขณะนี้' : '');
+  }
+
+  /* ================= การลงชื่อเข้าใช้ด้วย Google ================= */
+
+  /** เติมชื่อจากบัญชี Google ให้อัตโนมัติ (ผู้ใช้แก้ไขเองได้เสมอ) */
+  function prefillNameFromGoogle(force) {
+    var st = Auth.getState();
+    if (!st.profile || !st.profile.name) return;
+    var field = $('#f-name');
+    if (force || !field.value.trim()) field.value = st.profile.name;
+  }
+
+  /** อัปเดตการ์ดสถานะการลงชื่อเข้าใช้ */
+  function renderAuthState(st) {
+    var signedOut = $('#auth-signed-out');
+    var signedIn = $('#auth-signed-in');
+    var errBox = $('#auth-error');
+    var hint = $('#auth-hint');
+
+    if (st.signedIn && st.profile) {
+      signedOut.classList.add('hidden');
+      signedIn.classList.remove('hidden');
+      $('#auth-name').textContent = st.profile.name || '(ไม่มีชื่อในบัญชี)';
+      $('#auth-email').textContent = st.profile.email || '';
+      $('#auth-role').textContent =
+        'ระบบจะบันทึกบัญชีนี้เป็นผู้บันทึกข้อมูลทุกครั้งที่กดบันทึก';
+      prefillNameFromGoogle(false);
+    } else {
+      signedOut.classList.remove('hidden');
+      signedIn.classList.add('hidden');
+      if (!st.configured) {
+        hint.textContent = '';
+        errBox.textContent = st.error ||
+          'ระบบยังไม่ได้ตั้งค่าการลงชื่อเข้าใช้ด้วย Google กรุณาติดต่อผู้ดูแลระบบ';
+        errBox.classList.remove('hidden');
+      } else if (st.error) {
+        hint.textContent = '';
+        errBox.textContent = st.error;
+        errBox.classList.remove('hidden');
+      } else {
+        errBox.classList.add('hidden');
+        hint.textContent = st.ready
+          ? 'กดปุ่มด้านบนเพื่อลงชื่อเข้าใช้ด้วยบัญชี Google'
+          : 'กำลังเตรียมระบบลงชื่อเข้าใช้...';
+      }
+    }
+    updateSubmitAvailability();
+    if (typeof Admin !== 'undefined' && Admin.onAuthChange) Admin.onAuthChange(st);
+  }
+
+  /* ================= การ์ดสรุป "กำลังบันทึกลานใด" ================= */
+  function updateSelectionCard() {
+    var card = $('#selection-card');
+    var lot = state.selectedLot;
+    var ev = currentEvent();
+
+    $('#sel-day').textContent = ev
+      ? 'วันงาน: ' + ev.eventName + ' · ' + Utils.formatThaiDate(ev.eventDate) +
+        ' · ปี ' + state.currentYear
+      : 'ยังไม่มีวันงานที่เปิดให้บันทึก';
+
+    if (!lot) {
+      card.classList.add('is-empty');
+      $('#sel-empty').classList.remove('hidden');
+      $('#sel-detail').classList.add('hidden');
+      return;
+    }
+    card.classList.remove('is-empty');
+    $('#sel-empty').classList.add('hidden');
+    $('#sel-detail').classList.remove('hidden');
+    $('#sel-no').textContent = lot.parkingNo;
+    $('#sel-name').textContent = lot.parkingName;
+    $('#sel-meta').textContent =
+      (lot.zone && lot.zone !== 'ไม่กำกับโซน' ? 'Zone ' + lot.zone : 'ไม่กำกับโซน') +
+      ' · ความจุ ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน';
   }
 
   /** โหลดรายการลานจอดใหม่เมื่อเปลี่ยนปี/วันงาน */
   function reloadLots() {
     var year = Number($('#f-year').value) || state.currentYear;
     var eventId = $('#f-event').value;
+    if (!eventId) { state.lots = []; renderLotList(''); return Promise.resolve(); }
     showLoading(true);
     return Api.call('getParkingLots', { yearBE: year, eventId: eventId })
       .then(function (res) {
@@ -195,7 +446,7 @@ var App = (function () {
       .then(function () { showLoading(false); });
   }
 
-  /* ================= Searchable dropdown ของลานจอด ================= */
+  /* ================= รายการลานจอด: dropdown + ค้นหา ================= */
   var activeIndex = -1;
   var filtered = [];
 
@@ -224,33 +475,33 @@ var App = (function () {
   function renderLotList(query) {
     var box = $('#parking-listbox');
     box.innerHTML = '';
-    filtered = state.lots.filter(function (l) { return matchLot(l, query); }).slice(0, 60);
+    filtered = state.lots.filter(function (l) { return matchLot(l, query); });
     activeIndex = -1;
 
     if (state.lots.length === 0) {
-      var li0 = Utils.el('li', 'empty', 'ยังไม่มีรายการลานจอดในปี/วันงานที่เลือก');
-      box.appendChild(li0);
+      box.appendChild(Utils.el('li', 'empty', 'ยังไม่มีรายการลานจอดในปี/วันงานที่เลือก'));
       return;
     }
     if (filtered.length === 0) {
-      var li = Utils.el('li', 'empty', 'ไม่พบลานจอดที่ตรงกับคำค้นหา');
-      box.appendChild(li);
+      box.appendChild(Utils.el('li', 'empty', 'ไม่พบลานจอดที่ตรงกับคำค้นหา'));
       return;
     }
 
+    var selectedId = $('#f-parking-id').value;
     filtered.forEach(function (lot, idx) {
       var li = document.createElement('li');
       li.setAttribute('role', 'option');
       li.setAttribute('data-index', String(idx));
       li.setAttribute('id', 'lot-opt-' + idx);
+      li.setAttribute('aria-selected', lot.parkingId === selectedId ? 'true' : 'false');
+      if (lot.parkingId === selectedId) li.classList.add('selected-item');
 
-      var no = Utils.el('span', 'no', lot.parkingNo);
-      var name = Utils.el('span', 'name', lot.parkingName);
-      var zone = Utils.el('span', 'zone',
+      li.appendChild(Utils.el('span', 'no', lot.parkingNo));
+      li.appendChild(Utils.el('span', 'name', lot.parkingName));   // ชื่อเต็ม ไม่ตัดทอน
+      li.appendChild(Utils.el('span', 'zone',
         (lot.zone && lot.zone !== 'ไม่กำกับโซน' ? 'Zone ' + lot.zone : 'ไม่กำกับโซน') +
-        ' · ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน');
+        ' · ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน'));
 
-      li.appendChild(no); li.appendChild(name); li.appendChild(zone);
       li.addEventListener('mousedown', function (e) {
         e.preventDefault();
         selectLot(lot);
@@ -262,10 +513,23 @@ var App = (function () {
   function openList() {
     $('#parking-listbox').classList.remove('hidden');
     $('#f-parking-search').setAttribute('aria-expanded', 'true');
+    $('#parking-toggle').setAttribute('aria-expanded', 'true');
   }
   function closeList() {
     $('#parking-listbox').classList.add('hidden');
     $('#f-parking-search').setAttribute('aria-expanded', 'false');
+    $('#parking-toggle').setAttribute('aria-expanded', 'false');
+  }
+  function isListOpen() {
+    return !$('#parking-listbox').classList.contains('hidden');
+  }
+
+  /** ปุ่มลูกศร: เปิดดูรายการทั้งหมด (ล้างคำค้นหาเพื่อให้เห็นครบทุกลาน) */
+  function toggleList() {
+    if (isListOpen()) { closeList(); return; }
+    renderLotList('');
+    openList();
+    $('#f-parking-search').focus();
   }
 
   function selectLot(lot) {
@@ -275,15 +539,7 @@ var App = (function () {
     $('#f-parking-search').classList.remove('invalid');
     $('#parking-clear').classList.remove('hidden');
     closeList();
-
-    var info = $('#parking-info');
-    info.innerHTML = '';
-    info.appendChild(Utils.el('div', 'pname', lot.parkingName));
-    info.appendChild(Utils.el('div', 'pmeta',
-      'ลำดับที่ ' + lot.parkingNo +
-      ' · ' + (lot.zone && lot.zone !== 'ไม่กำกับโซน' ? 'Zone ' + lot.zone : 'ไม่กำกับโซน') +
-      ' · ความจุ ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน'));
-    info.classList.remove('hidden');
+    updateSelectionCard();
     checkCapacityWarning();
     $('#f-count').focus();
   }
@@ -292,9 +548,9 @@ var App = (function () {
     state.selectedLot = null;
     $('#f-parking-id').value = '';
     $('#f-parking-search').value = '';
-    $('#parking-info').classList.add('hidden');
     $('#parking-clear').classList.add('hidden');
     $('#capacity-warning').textContent = '';
+    updateSelectionCard();
   }
 
   function moveActive(delta) {
@@ -304,9 +560,7 @@ var App = (function () {
     if (activeIndex >= filtered.length) activeIndex = 0;
     Utils.$$('#parking-listbox li').forEach(function (li, i) {
       li.classList.toggle('active', i === activeIndex);
-      if (i === activeIndex && li.scrollIntoView) {
-        li.scrollIntoView({ block: 'nearest' });
-      }
+      if (i === activeIndex && li.scrollIntoView) li.scrollIntoView({ block: 'nearest' });
     });
     $('#f-parking-search').setAttribute('aria-activedescendant', 'lot-opt-' + activeIndex);
   }
@@ -330,8 +584,7 @@ var App = (function () {
       return true;
     }
     if (cap > 0) {
-      var pct = (count / cap * 100).toFixed(2);
-      warnBox.textContent = 'คิดเป็นการใช้พื้นที่ ' + pct + '% ของความจุ';
+      warnBox.textContent = 'คิดเป็นการใช้พื้นที่ ' + (count / cap * 100).toFixed(2) + '% ของความจุ';
       warnBox.className = 'hint';
     } else {
       warnBox.textContent = '';
@@ -350,7 +603,7 @@ var App = (function () {
       var f = $(fieldId);
       if (f) {
         f.classList.add('invalid');
-        f.focus();
+        if (f.focus) f.focus();
         if (f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }
     }
@@ -364,8 +617,23 @@ var App = (function () {
   function validateForm() {
     clearFormError();
 
+    // ต้องลงชื่อเข้าใช้ก่อนเสมอ (เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นอยู่แล้ว)
+    if (!Auth.isSignedIn()) {
+      showFormError('กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อนบันทึกข้อมูล');
+      Auth.promptSignIn();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return null;
+    }
+
     var ev = currentEvent();
-    if (!ev) { showFormError('ยังไม่มีข้อมูลวันงาน กรุณาติดต่อผู้ดูแลระบบ', '#f-event'); return null; }
+    if (!ev) {
+      showFormError('ขณะนี้ไม่มีวันงานที่เปิดให้บันทึกข้อมูล กรุณาตรวจสอบวันและเวลา หรือติดต่อผู้ดูแลระบบ');
+      return null;
+    }
+    if (!ev.isOpenNow) {
+      showFormError('วันงานที่เลือกอยู่นอกช่วงเวลาที่เปิดให้บันทึกแล้ว กรุณาเลือกวันงานที่ระบบเปิดให้บันทึก');
+      return null;
+    }
 
     if (!state.selectedLot || !$('#f-parking-id').value) {
       showFormError('กรุณาเลือกลานจอดรถ', '#f-parking-search'); return null;
@@ -387,12 +655,6 @@ var App = (function () {
       showFormError('กรุณากรอกชื่อ-นามสกุลผู้บันทึก', '#f-name'); return null;
     }
 
-    var email = $('#f-email').value.trim().toLowerCase();
-    if (!email) { showFormError('กรุณากรอกอีเมล', '#f-email'); return null; }
-    if (!Utils.isValidEmail(email)) {
-      showFormError('รูปแบบอีเมลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง', '#f-email'); return null;
-    }
-
     var phoneRaw = $('#f-phone').value.trim();
     var phone = '';
     if (phoneRaw) {
@@ -409,7 +671,6 @@ var App = (function () {
       parkingId: $('#f-parking-id').value,
       vehicleCount: count,
       recorderName: name,
-      email: email,
       phone: phone,
       note: $('#f-note').value.trim(),
       clientTimestamp: Utils.clientTimestamp(),
@@ -423,6 +684,30 @@ var App = (function () {
     var btn = $('#btn-submit');
     btn.disabled = on;
     btn.textContent = on ? 'กำลังบันทึกข้อมูล...' : 'บันทึกข้อมูล';
+    if (!on) updateSubmitAvailability();
+  }
+
+  /** ข้อความยืนยันก่อนบันทึก — ย้ำลานและวันงานเพื่อกันการบันทึกผิด */
+  function buildConfirmMessage(payload, overCapacity) {
+    var lot = state.selectedLot;
+    var ev = currentEvent();
+    var lines = [
+      'ยืนยันการบันทึกข้อมูล',
+      '',
+      'ลานจอด:  ' + lot.parkingNo + ' — ' + lot.parkingName,
+      'โซน:      ' + (lot.zone || 'ไม่กำกับโซน'),
+      'วันงาน:   ' + ev.eventName + ' (' + Utils.formatThaiDate(ev.eventDate) + ')',
+      'จำนวนรถ: ' + Utils.formatNumber(payload.vehicleCount) + ' คัน'
+    ];
+    if (overCapacity) {
+      lines.push('');
+      lines.push('⚠ จำนวนรถมากกว่าความจุที่กำหนดไว้ (' +
+        Utils.formatNumber(lot.effectiveCapacity) + ' คัน)');
+      lines.push('กรุณาตรวจสอบให้แน่ใจก่อนกดตกลง');
+    }
+    lines.push('');
+    lines.push('กด "ตกลง" เพื่อบันทึก หรือ "ยกเลิก" เพื่อกลับไปแก้ไข');
+    return lines.join('\n');
   }
 
   function handleSubmit(e) {
@@ -441,16 +726,12 @@ var App = (function () {
     var payload = validateForm();
     if (!payload) return;
 
-    // เกินความจุ: เตือนและให้ยืนยันก่อน (ไม่บล็อก)
-    if (checkCapacityWarning()) {
-      var cap = state.selectedLot.effectiveCapacity;
-      var ok = window.confirm(
-        'จำนวนรถที่กรอก (' + Utils.formatNumber(payload.vehicleCount) + ' คัน) ' +
-        'มากกว่าความจุที่กำหนดไว้ (' + Utils.formatNumber(cap) + ' คัน)\n\n' +
-        'กรุณาตรวจสอบข้อมูลอีกครั้ง หากถูกต้องแล้วกด "ตกลง" เพื่อบันทึก');
-      if (!ok) { $('#f-count').focus(); return; }
-      payload.confirmOverCapacity = true;
+    var overCapacity = checkCapacityWarning();
+    if (!window.confirm(buildConfirmMessage(payload, overCapacity))) {
+      if (overCapacity) $('#f-count').focus();
+      return;
     }
+    if (overCapacity) payload.confirmOverCapacity = true;
 
     setSubmitting(true);
     Api.call('submitRecord', payload)
@@ -462,30 +743,34 @@ var App = (function () {
         } else {
           Utils.toast('บันทึกข้อมูลสำเร็จ', 'success');
         }
-        // requestId ใหม่สำหรับรายการถัดไป
-        state.requestId = Utils.uuid();
+        state.requestId = Utils.uuid();   // requestId ใหม่สำหรับรายการถัดไป
       })
       .catch(function (err) {
         var msg = Api.friendlyMessage(err);
         var field = null;
         if (err.errors && err.errors.length) {
           var map = {
-            vehicleCount: '#f-count', recorderName: '#f-name', email: '#f-email',
-            phone: '#f-phone', eventId: '#f-event', parkingId: '#f-parking-search'
+            vehicleCount: '#f-count', recorderName: '#f-name',
+            phone: '#f-phone', parkingId: '#f-parking-search'
           };
           field = map[err.errors[0].field] || null;
           msg = err.errors[0].message;
         }
         showFormError(msg, field);
         Utils.toast(msg, 'error');
+        // ช่วงเวลาปิดหรือปีถูกปิดระหว่างใช้งาน -> รีเฟรชรายการให้ตรงกับความจริง
+        if (err.errorCode === 'WINDOW_CLOSED' || err.errorCode === 'YEAR_INACTIVE') {
+          refreshRecordingStatus();
+        }
       })
       .then(function () { setSubmitting(false); });
   }
 
   function saveRecorderIfWanted(payload) {
     if ($('#f-remember').checked) {
+      // เก็บเฉพาะชื่อและเบอร์โทร — อีเมลมาจากบัญชี Google จึงไม่ต้องเก็บ
       Utils.setJson(APP_CONFIG.STORAGE_KEYS.RECORDER, {
-        name: payload.recorderName, phone: payload.phone, email: payload.email
+        name: payload.recorderName, phone: payload.phone
       });
     } else {
       Utils.safeRemove(APP_CONFIG.STORAGE_KEYS.RECORDER);
@@ -501,9 +786,8 @@ var App = (function () {
 
     function addRow(label, value, big) {
       var row = document.createElement('div');
-      var dt = Utils.el('dt', '', label);
-      var dd = Utils.el('dd', big ? 'big' : '', value);
-      row.appendChild(dt); row.appendChild(dd);
+      row.appendChild(Utils.el('dt', '', label));
+      row.appendChild(Utils.el('dd', big ? 'big' : '', value));
       list.appendChild(row);
     }
 
@@ -518,6 +802,7 @@ var App = (function () {
     addRow('รหัสรายการ', rec.recordId || res.recordId || '-');
 
     $('#form-card').classList.add('hidden');
+    $('#selection-card').classList.add('hidden');
     $('#success-card').classList.remove('hidden');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -525,6 +810,7 @@ var App = (function () {
   function nextEntry() {
     $('#success-card').classList.add('hidden');
     $('#form-card').classList.remove('hidden');
+    $('#selection-card').classList.remove('hidden');
     clearFormError();
 
     var continuous = $('#f-continuous').checked;
@@ -537,14 +823,63 @@ var App = (function () {
 
     if (!continuous && !$('#f-remember').checked) {
       // โหมดปกติ และไม่ได้เลือกให้จำข้อมูลผู้กรอก -> ล้างข้อมูลผู้กรอกด้วย
-      $('#f-name').value = '';
+      // (ชื่อจะถูกเติมกลับจากบัญชี Google ให้อัตโนมัติ)
       $('#f-phone').value = '';
-      $('#f-email').value = '';
+      prefillNameFromGoogle(true);
     }
     // โหมดบันทึกต่อเนื่อง: คงปี วันงาน ชื่อ เบอร์โทร และอีเมลไว้ทั้งหมด
 
     state.requestId = Utils.uuid();
     $('#f-parking-search').focus();
+  }
+
+  /* ================= รีเฟรชสถานะการเปิดรับข้อมูลตามเวลาจริง ================= */
+  function refreshRecordingStatus() {
+    if (!Api.isConfigured() || navigator.onLine === false) return Promise.resolve();
+    return Api.call('getRecordingStatus', { yearBE: state.currentYear })
+      .then(function (res) {
+        state.years = res.years || state.years;
+        state.serverTime = res.serverTime || state.serverTime;
+
+        var currentStillOpen = false;
+        var yearInfo = state.years.filter(function (y) {
+          return Number(y.yearBE) === Number(state.currentYear);
+        })[0];
+
+        if (Number(res.yearBE) === Number(state.currentYear)) {
+          state.events = res.events || state.events;
+          currentStillOpen = (res.openEventIds || []).indexOf($('#f-event').value) >= 0;
+        }
+        renderYearButtons();
+
+        var stillSelectable = !yearInfo ||
+          ((yearInfo.selectable !== undefined) ? yearInfo.selectable : yearInfo.status === 'Active');
+        if (!stillSelectable) {
+          // ผู้ดูแลปิดรับข้อมูลของปีนี้ระหว่างที่ผู้ใช้เปิดหน้าอยู่
+          renderEventButtons('');
+          updateHeaderEvent();
+          updateSelectionCard();
+          return;
+        }
+        renderEventButtons(currentStillOpen ? $('#f-event').value : '');
+        updateHeaderEvent();
+        updateSelectionCard();
+      })
+      .catch(function (err) { console.warn('[recordingStatus]', err); });
+  }
+
+  function startStatusRefresh() {
+    stopStatusRefresh();
+    if (!APP_CONFIG.RECORD_STATUS_REFRESH_MS) return;
+    statusTimer = setInterval(function () {
+      var view = $('#view-record');
+      if (view && view.classList.contains('active') && !state.submitting) {
+        refreshRecordingStatus();
+      }
+    }, APP_CONFIG.RECORD_STATUS_REFRESH_MS);
+  }
+  function stopStatusRefresh() {
+    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
   }
 
   /* ================= ข้อมูลผู้กรอกที่จำไว้ ================= */
@@ -553,7 +888,6 @@ var App = (function () {
     if (saved) {
       $('#f-name').value = saved.name || '';
       $('#f-phone').value = saved.phone || '';
-      $('#f-email').value = saved.email || '';
       $('#f-remember').checked = true;
     }
     if (Utils.safeGet(APP_CONFIG.STORAGE_KEYS.CONTINUOUS) === '1') {
@@ -563,21 +897,17 @@ var App = (function () {
 
   /* ================= การผูก event ================= */
   function bindEvents() {
+    Auth.renderButton($('#gsi-button'));
+    Auth.onChange(renderAuthState);
+    $('#btn-signout').addEventListener('click', function () {
+      Auth.signOut();
+      Utils.toast('ออกจากระบบแล้ว', 'info');
+    });
+
     Utils.$$('.nav-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
         switchView(btn.getAttribute('data-view'));
       });
-    });
-
-    $('#f-event').addEventListener('change', function () {
-      updateEventDate();
-      updateHeaderEvent();
-      reloadLots();
-    });
-
-    $('#f-year').addEventListener('change', function () {
-      var y = Number($('#f-year').value);
-      bootstrap(y, '').catch(function () {});
     });
 
     var search = $('#f-parking-search');
@@ -590,7 +920,7 @@ var App = (function () {
         // ผู้ใช้พิมพ์ทับค่าที่เลือกไว้ = เริ่มเลือกใหม่
         state.selectedLot = null;
         $('#f-parking-id').value = '';
-        $('#parking-info').classList.add('hidden');
+        updateSelectionCard();
       }
       renderLotList(search.value.trim());
       openList();
@@ -599,16 +929,18 @@ var App = (function () {
       if (e.key === 'ArrowDown') { e.preventDefault(); openList(); moveActive(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1); }
       else if (e.key === 'Enter') {
-        if (!$('#parking-listbox').classList.contains('hidden')) {
+        if (isListOpen()) {
           e.preventDefault();
           var idx = activeIndex >= 0 ? activeIndex : 0;
           if (filtered[idx]) selectLot(filtered[idx]);
         }
       } else if (e.key === 'Escape') { closeList(); }
     });
-    search.addEventListener('blur', function () {
-      setTimeout(closeList, 150);
-    });
+    search.addEventListener('blur', function () { setTimeout(closeList, 150); });
+
+    $('#parking-toggle').addEventListener('mousedown', function (e) { e.preventDefault(); });
+    $('#parking-toggle').addEventListener('click', toggleList);
+
     $('#parking-clear').addEventListener('click', function () {
       clearSelectedLot();
       renderLotList('');
@@ -616,8 +948,7 @@ var App = (function () {
     });
 
     $('#f-count').addEventListener('input', function () {
-      // อนุญาตเฉพาะตัวเลข
-      var v = this.value.replace(/[^\d]/g, '');
+      var v = this.value.replace(/[^\d]/g, '');   // อนุญาตเฉพาะตัวเลข
       if (v !== this.value) this.value = v;
       checkCapacityWarning();
     });
@@ -636,10 +967,18 @@ var App = (function () {
     window.addEventListener('online', function () {
       Utils.toast('กลับมาเชื่อมต่ออินเทอร์เน็ตแล้ว', 'success');
       checkHealth();
+      refreshRecordingStatus();
     });
     window.addEventListener('offline', function () {
       setConnStatus('error', 'ไม่ได้เชื่อมต่ออินเทอร์เน็ต');
       Utils.toast('ไม่ได้เชื่อมต่ออินเทอร์เน็ต ข้อมูลจะยังไม่ถูกบันทึกจนกว่าจะเชื่อมต่อได้', 'warn');
+    });
+
+    // กลับมาที่หน้าเว็บอีกครั้ง (เช่น ปลดล็อกหน้าจอ) ให้ตรวจสถานะใหม่ทันที
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && $('#view-record').classList.contains('active')) {
+        refreshRecordingStatus();
+      }
     });
   }
 
@@ -651,16 +990,21 @@ var App = (function () {
 
     bindEvents();
     restoreRecorder();
+    updateSelectionCard();
+    renderAuthState(Auth.getState());
 
     if (!Api.isConfigured()) {
       $('#setup-warning').classList.remove('hidden');
       setConnStatus('error', 'ยังไม่ได้ตั้งค่าระบบ');
       $('#btn-submit').disabled = true;
+      $('#year-hint').textContent = 'ยังไม่ได้ตั้งค่าที่อยู่ของระบบหลังบ้าน';
       return;
     }
 
     checkHealth();
-    bootstrap(null, null).catch(function () { /* แสดง error แล้วใน bootstrap */ });
+    bootstrap(null, null)
+      .then(function () { startStatusRefresh(); })
+      .catch(function () { /* แสดง error แล้วใน bootstrap */ });
   }
 
   document.addEventListener('DOMContentLoaded', init);
@@ -671,7 +1015,10 @@ var App = (function () {
     showLoading: showLoading,
     bootstrap: bootstrap,
     renderYearOptions: renderYearOptions,
+    refreshRecordingStatus: refreshRecordingStatus,
     checkHealth: checkHealth,
-    currentEvent: currentEvent
+    currentEvent: currentEvent,
+    renderAuthState: renderAuthState,
+    updateSubmitAvailability: updateSubmitAvailability
   };
 })();

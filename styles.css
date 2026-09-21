@@ -65,7 +65,13 @@ body {
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 22px;
 }
-.brand-text h1 { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 700; }
+.brand-text h1 {
+  margin: 0; font-weight: 700; line-height: 1.28;
+  display: flex; flex-direction: column;
+}
+.brand-text h1 .t1 { font-size: 17px; }
+.brand-text h1 .t2 { font-size: 14.5px; font-weight: 600; opacity: .95; }
+.brand-text h1 .t3 { font-size: 13.5px; font-weight: 600; opacity: .85; letter-spacing: .2px; }
 .brand-text p { margin: 2px 0 0; font-size: 13px; opacity: .88; }
 
 .header-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -165,13 +171,131 @@ textarea.input { min-height: 64px; resize: vertical; }
 .btn-ghost { background: transparent; color: var(--navy); border-color: var(--border); }
 .btn-danger { background: var(--danger-bg); color: var(--danger); border-color: #f0c4c4; }
 
-/* ---------------- Combo (searchable dropdown) ---------------- */
-.combo { position: relative; }
-.combo-clear {
-  position: absolute; right: 8px; top: 8px; min-height: 34px; padding: 0 12px;
-  border: 1px solid var(--border); background: #f2f4fa; border-radius: 8px;
-  font-family: inherit; font-size: 13px; color: var(--text-soft); cursor: pointer;
+/* ---------------- การลงชื่อเข้าใช้ด้วย Google ---------------- */
+.auth-card { border-left: 5px solid var(--gold); }
+.gsi-host { display: flex; justify-content: center; margin: 14px 0 10px; min-height: 44px; }
+
+.identity { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.identity-badge {
+  width: 38px; height: 38px; flex: 0 0 38px; border-radius: 50%;
+  background: var(--ok); color: #fff; font-size: 21px;
+  display: flex; align-items: center; justify-content: center;
 }
+.identity-text { flex: 1 1 180px; min-width: 0; }
+.identity-label {
+  margin: 0; font-size: 12px; font-weight: 700; color: var(--ok);
+  letter-spacing: .3px; text-transform: uppercase;
+}
+.identity-name {
+  margin: 1px 0 0; font-size: 16.5px; font-weight: 700; color: var(--text);
+  overflow-wrap: anywhere;
+}
+.identity-email {
+  margin: 1px 0 0; font-size: 14px; color: var(--text-soft); overflow-wrap: anywhere;
+}
+.identity .btn-sm { flex: 0 0 auto; }
+.admin-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 9px; border-radius: 999px;
+  background: var(--navy); color: #fff; font-size: 12px; font-weight: 700;
+}
+
+/* ---------------- ขั้นตอนในแบบฟอร์ม ---------------- */
+.field-label {
+  display: block; margin-bottom: 8px; font-size: 15px; font-weight: 600; color: var(--text);
+}
+.step-no {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-right: 8px; flex: 0 0 22px;
+  border-radius: 50%; background: var(--navy); color: #fff;
+  font-size: 13px; font-weight: 700; vertical-align: -3px;
+}
+
+/* ---------------- ปุ่มเลือกปี / วันงาน ---------------- */
+.choice-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.choice-col { flex-direction: column; }
+.choice-col .choice-btn { width: 100%; text-align: left; }
+
+.choice-btn {
+  position: relative;
+  min-height: var(--tap); padding: 10px 18px;
+  border: 2px solid var(--border); border-radius: 10px;
+  background: #fff; color: var(--text);
+  font-family: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px; justify-content: center;
+}
+.choice-btn .cb-sub { font-size: 12.5px; font-weight: 500; color: var(--text-soft); }
+.choice-btn:hover:not([disabled]) { border-color: var(--navy-light); background: #f6f8ff; }
+.choice-btn:focus-visible { outline: 3px solid var(--navy-light); outline-offset: 2px; }
+.choice-btn.selected {
+  background: var(--navy); border-color: var(--navy); color: #fff;
+}
+.choice-btn.selected .cb-sub { color: #d7e0f8; }
+.choice-btn[disabled] {
+  cursor: not-allowed;
+  filter: grayscale(1);
+  opacity: .48;
+  background: #f1f3f7; border-color: #dfe3ec; color: var(--text-soft);
+  border-style: dashed;
+}
+.choice-btn[disabled] .cb-sub { color: var(--text-soft); }
+.choice-empty {
+  width: 100%; padding: 14px; border-radius: 10px;
+  background: var(--warn-bg); border: 1px solid #f0dcb0; color: var(--warn);
+  font-size: 15px; font-weight: 600;
+}
+
+/* ---------------- การ์ดสรุปลานที่กำลังบันทึก ---------------- */
+/**
+ * การ์ดนี้ "ติดหนึบ" อยู่ใต้แถบเมนู เพื่อให้เจ้าหน้าที่เห็นตลอดว่ากำลังบันทึกลานใด
+ * แม้จะเลื่อนลงไปกรอกจำนวนรถแล้ว — เป็นหัวใจของการกันบันทึกผิดลาน
+ */
+.selection-card {
+  position: sticky; top: 48px; z-index: 25;
+  border: 2px solid var(--navy); border-radius: var(--radius);
+  background: #eef2fc; padding: 12px 16px; margin-bottom: 18px;
+  box-shadow: 0 4px 14px rgba(20, 35, 80, .12);
+}
+.selection-card.is-empty { border-style: dashed; border-color: #b9c4e0; background: #f7f9fe; }
+.sel-label {
+  margin: 0 0 6px; font-size: 12.5px; font-weight: 700; letter-spacing: .4px;
+  color: var(--navy); text-transform: uppercase;
+}
+.sel-empty { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-soft); }
+.sel-main { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sel-no {
+  flex: 0 0 auto; font-size: 26px; font-weight: 800; color: #fff;
+  background: var(--navy); border-radius: 8px; padding: 0 12px; line-height: 1.35;
+}
+.sel-name { font-size: 19px; font-weight: 800; color: var(--navy-dark); line-height: 1.3; }
+.sel-meta { margin: 6px 0 0; font-size: 14px; color: var(--text-soft); font-weight: 600; }
+.sel-day {
+  margin: 8px 0 0; padding-top: 7px; border-top: 1px dashed #c3cde6;
+  font-size: 13.5px; color: var(--text); font-weight: 600;
+}
+
+/* หน้าจอเตี้ย (มือถือแนวนอน) — ลดความสูงของการ์ดไม่ให้กินพื้นที่กรอกข้อมูล */
+@media (max-height: 560px) {
+  .selection-card { position: static; }
+}
+
+/* ---------------- Combo (dropdown + ค้นหา) ---------------- */
+.combo { position: relative; }
+.combo-input-row { display: flex; gap: 8px; align-items: stretch; }
+.combo-input-row .input { flex: 1 1 auto; min-width: 0; }
+.combo-toggle {
+  flex: 0 0 56px; width: 56px; min-height: var(--tap);
+  border: 2px solid var(--border); border-radius: 10px;
+  background: #eef2fc; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.combo-toggle:hover { background: #e1e8fa; }
+.combo-toggle:focus-visible { outline: 3px solid var(--navy-light); outline-offset: 2px; }
+.combo-toggle .caret {
+  width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent;
+  border-top: 10px solid var(--navy); transition: transform .15s ease;
+}
+.combo-toggle[aria-expanded="true"] .caret { transform: rotate(180deg); }
+.combo-clear-btn { margin-top: 8px; width: 100%; }
 .combo-list {
   position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
   max-height: 320px; overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -190,13 +314,8 @@ textarea.input { min-height: 64px; resize: vertical; }
 }
 .combo-list li .zone { margin-left: auto; font-size: 13px; color: var(--text-soft); }
 .combo-list li.empty { color: var(--text-soft); cursor: default; }
-
-.parking-info {
-  margin-top: 10px; padding: 12px 14px; border-radius: 10px;
-  background: #eef2fc; border: 1px solid #ccd8f5;
-}
-.parking-info .pname { font-weight: 700; font-size: 16px; }
-.parking-info .pmeta { font-size: 14px; color: var(--text-soft); margin-top: 3px; }
+.combo-list li .name { flex: 1 1 auto; min-width: 0; }
+.combo-list li.selected-item { background: #dbe5ff; }
 
 /* ---------------- Alerts / Toast ---------------- */
 .alert {
@@ -352,13 +471,29 @@ textarea.input { min-height: 64px; resize: vertical; }
 .app-footer .version { opacity: .8; }
 
 /* ---------------- Responsive ---------------- */
+/* จอแคบมาก (เช่น 360px) — ปุ่มปีเรียงเต็มความกว้างแทนการบีบจนอ่านยาก */
+@media (max-width: 400px) {
+  .wrap { padding: 0 12px; }
+  .choice-row .choice-btn { flex: 1 1 calc(50% - 5px); text-align: center; align-items: center; }
+  .choice-col .choice-btn { flex: 1 1 100%; text-align: left; align-items: flex-start; }
+  .sel-name { font-size: 17px; }
+  .sel-no { font-size: 23px; }
+  .combo-toggle { flex: 0 0 50px; width: 50px; }
+  .data-table { font-size: 14px; }
+}
+
 @media (min-width: 680px) {
   .kpi-grid { grid-template-columns: repeat(4, 1fr); }
   .filter-row { grid-template-columns: repeat(3, 1fr); }
   .btn { width: auto; min-width: 180px; }
   .btn-lg { min-width: 260px; }
+  .combo-clear-btn { width: auto; }
   .app-header .wrap { flex-direction: row; justify-content: space-between; align-items: center; }
-  .brand-text h1 { font-size: 21px; }
+  .brand-text h1 .t1 { font-size: 21px; }
+  .brand-text h1 .t2 { font-size: 16px; }
+  .brand-text h1 .t3 { font-size: 15px; }
+  .choice-col { flex-direction: row; }
+  .choice-col .choice-btn { width: auto; flex: 1 1 220px; }
 }
 
 @media (min-width: 900px) {

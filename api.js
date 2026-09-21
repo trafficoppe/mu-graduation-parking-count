@@ -13,6 +13,20 @@
  *                 (นับเป็น simple request จึงไม่เกิด preflight)
  *                 -> ถ้าล้มเหลวใช้ JSONP GET ที่ส่ง payload มาใน query string
  *  - ทุกคำขอเขียนมี requestId (Idempotency Key) จึงส่งซ้ำได้โดยข้อมูลไม่ซ้ำ
+ *
+ * ============================================================================
+ * กฎเพิ่มเติมของเวอร์ชัน 1.2.0 (การยืนยันตัวตนด้วย Google)
+ * ============================================================================
+ * คำขอแบ่งเป็นสองกลุ่มที่ใช้ "ช่องทางคนละแบบ" อย่างเคร่งครัด
+ *
+ *   1) คำขออ่านข้อมูลสาธารณะ (ไม่ต้องลงชื่อเข้าใช้)
+ *      GET ธรรมดา -> ถ้าล้มเหลวจึงใช้ JSONP เป็นช่องทางสำรอง  (เหมือนเดิม)
+ *
+ *   2) คำขอที่ต้องยืนยันตัวตน (บันทึกข้อมูล และทุกคำสั่งของผู้ดูแลระบบ)
+ *      POST (Content-Type: text/plain) เท่านั้น **ห้ามใช้ JSONP เด็ดขาด**
+ *      เพราะ JSONP ส่งข้อมูลผ่าน query string ซึ่งจะทำให้ ID Token ไปปรากฏใน
+ *      URL, log ของพร็อกซี, ประวัติเบราว์เซอร์ และ header Referer
+ *      หาก POST ล้มเหลว ระบบจะแจ้งข้อผิดพลาดตรง ๆ ไม่มีการถอยไปใช้ JSONP
  */
 var Api = (function () {
   'use strict';
@@ -21,7 +35,24 @@ var Api = (function () {
     submitRecord: true, addParking: true, updateParking: true,
     deactivateParking: true, activateParking: true, setParkingDayConfig: true,
     addEventDay: true, updateEventDay: true, createYear: true,
-    setActiveYear: true, rebuildSummary: true
+    setActiveYear: true, rebuildSummary: true,
+    setRecordingWindow: true, setYearStatus: true
+  };
+
+  /**
+   * คำขอที่ต้องแนบ Google ID Token
+   * ต้องตรงกับ ACTION_AUTH ฝั่ง Backend (ระดับ USER และ ADMIN)
+   * หมายเหตุ: ฝั่งเซิร์ฟเวอร์เป็นผู้ตัดสินสิทธิ์จริงเสมอ รายการนี้มีไว้เพื่อ
+   * เลือกช่องทางส่งข้อมูลให้ถูกต้องเท่านั้น
+   */
+  var AUTH_ACTIONS = {
+    submitRecord: true, getMyIdentity: true,
+    getHistory: true, getAuditLog: true, getAdminParkingLots: true,
+    addParking: true, updateParking: true, deactivateParking: true,
+    activateParking: true, setParkingDayConfig: true, addEventDay: true,
+    updateEventDay: true, createYear: true, setActiveYear: true,
+    rebuildSummary: true, getRecordingWindow: true, setRecordingWindow: true,
+    setYearStatus: true
   };
 
   var lastTransport = '';
@@ -184,8 +215,19 @@ var Api = (function () {
     payload.action = action;
     if (!payload.deviceId) payload.deviceId = Utils.getDeviceId();
 
+    var needsAuth = !!AUTH_ACTIONS[action];
+    if (needsAuth) {
+      // แนบ token จากหน่วยความจำ (ไม่เคยอ่านจาก localStorage หรือ URL)
+      var token = (typeof Auth !== 'undefined') ? Auth.getToken() : null;
+      if (!token) {
+        return Promise.reject(apiError(
+          'กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อนดำเนินการ', 'AUTH_REQUIRED'));
+      }
+      payload.idToken = token;
+    }
+
     var isWrite = !!WRITE_ACTIONS[action];
-    var primary = isWrite
+    var primary = (isWrite || needsAuth)
       ? function () { lastTransport = 'POST'; return fetchPost(payload); }
       : function () { lastTransport = 'GET'; return fetchGet(payload); };
 
@@ -204,6 +246,13 @@ var Api = (function () {
         console.warn('[API] primary transport failed for "' + action + '":', err && err.message);
         // ไม่ retry กรณีที่ทราบชัดว่าไม่ใช่ปัญหาการเชื่อมต่อ
         if (err && (err.errorCode === 'PAYLOAD_TOO_LARGE')) throw err;
+        // *** คำขอที่มี token ห้ามถอยไปใช้ JSONP เด็ดขาด ***
+        // เพราะ token จะไปโผล่ใน URL ยอมให้คำขอล้มเหลวไปเลยดีกว่า
+        if (needsAuth) {
+          throw apiError(
+            'ไม่สามารถเชื่อมต่อระบบได้ กรุณาตรวจสอบสัญญาณอินเทอร์เน็ตแล้วลองใหม่',
+            'NETWORK_ERROR');
+        }
         return fallback();
       })
       .then(function (data) {
@@ -213,6 +262,10 @@ var Api = (function () {
         }
         if (data.success === false) {
           console.warn('[API] ' + action + ' -> ' + data.errorCode + ' (' + ms + 'ms)');
+          // ถ้าเซิร์ฟเวอร์บอกว่าการลงชื่อเข้าใช้ใช้ไม่ได้แล้ว ให้ล้างสถานะและขอใหม่
+          if (typeof Auth !== 'undefined' && data.errorCode) {
+            Auth.handleAuthFailure(data.errorCode);
+          }
           throw apiError(data.message, data.errorCode, data.errors);
         }
         console.log('[API] ' + action + ' ok via ' + lastTransport + ' (' + ms + 'ms)');
@@ -244,6 +297,16 @@ var Api = (function () {
         return 'มีการส่งข้อมูลถี่เกินไป กรุณารอสักครู่แล้วลองใหม่';
       case 'LOCK_TIMEOUT':
         return 'ขณะนี้มีผู้ใช้งานจำนวนมาก กรุณาลองใหม่อีกครั้ง';
+      case 'AUTH_REQUIRED':
+        return err.message || 'กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อนดำเนินการ';
+      case 'AUTH_EXPIRED':
+        return 'การลงชื่อเข้าใช้หมดอายุแล้ว กรุณาลงชื่อเข้าใช้อีกครั้งแล้วลองใหม่';
+      case 'AUTH_INVALID':
+        return err.message || 'การลงชื่อเข้าใช้ไม่ถูกต้อง กรุณาลงชื่อเข้าใช้ใหม่อีกครั้ง';
+      case 'FORBIDDEN':
+        return err.message || 'บัญชีนี้ไม่มีสิทธิ์ดำเนินการนี้';
+      case 'TOKEN_IN_URL':
+        return 'ไม่สามารถส่งข้อมูลการลงชื่อเข้าใช้ด้วยวิธีนี้ได้ กรุณารีเฟรชหน้าเว็บแล้วลองใหม่';
       case 'UNAUTHORIZED':
         return err.message || 'ไม่มีสิทธิ์ดำเนินการนี้';
       case 'VALIDATION_ERROR':

@@ -2,38 +2,32 @@
  * admin.js
  * ส่วนผู้ดูแลระบบ: ประวัติการบันทึก, จัดการลานจอด, จัดการวันงาน, จัดการปี, ตรวจสอบระบบ
  *
- * ข้อจำกัดด้านความปลอดภัยที่ต้องทราบ:
- *  - รหัสผู้ดูแลเป็น Shared Secret เก็บไว้ใน sessionStorage เท่านั้น (ปิดแท็บแล้วหาย)
- *  - ไม่เก็บใน localStorage และไม่ส่งไปที่ใดนอกจาก Web App ของหน่วยงานเอง
- *  - การตรวจสิทธิ์จริงเกิดที่ฝั่ง Backend ทุกครั้ง
+ * เวอร์ชัน 1.2.0: เปลี่ยนจาก "รหัสร่วม (Shared Secret)" เป็น "บัญชี Google"
+ *  - ผู้ดูแลลงชื่อเข้าใช้ด้วยบัญชี Google เหมือนผู้ใช้ทั่วไป
+ *  - เซิร์ฟเวอร์ตรวจอีเมลที่ยืนยันแล้วกับรายชื่อ ADMIN_EMAILS ใน Script Properties
+ *  - หน้าเว็บไม่มีสิทธิ์ตัดสินว่าใครเป็นผู้ดูแล ทำได้แค่ซ่อน/แสดงเมนูเท่านั้น
+ *  - ไม่มีรหัสผ่านใด ๆ เก็บไว้ในเบราว์เซอร์อีกต่อไป
  */
 var Admin = (function () {
   'use strict';
 
   var $ = Utils.$;
-  var TOKEN_KEY = 'gpvcs.adminToken.session';
   var initialized = false;
   var historyData = null;
+  var isAdmin = false;
 
-  function getToken() {
-    try { return window.sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
-  }
-  function setToken(t) {
-    try {
-      if (t) window.sessionStorage.setItem(TOKEN_KEY, t);
-      else window.sessionStorage.removeItem(TOKEN_KEY);
-    } catch (e) {}
-  }
-
-  /** เรียก API ฝั่งผู้ดูแล (แนบ token อัตโนมัติ) */
+  /**
+   * เรียก API ฝั่งผู้ดูแล
+   * ไม่ต้องแนบรหัสใด ๆ — api.js จะแนบ Google ID Token ให้อัตโนมัติ
+   * และเซิร์ฟเวอร์เป็นผู้ตัดสินสิทธิ์
+   */
   function adminCall(action, params) {
-    var p = Object.assign({}, params || {});
-    p.adminToken = getToken();
-    return Api.call(action, p).catch(function (err) {
-      if (err.errorCode === 'UNAUTHORIZED') {
-        setToken('');
+    return Api.call(action, params || {}).catch(function (err) {
+      if (err.errorCode === 'FORBIDDEN' || err.errorCode === 'AUTH_REQUIRED' ||
+          err.errorCode === 'AUTH_EXPIRED' || err.errorCode === 'AUTH_INVALID') {
+        isAdmin = false;
         showLogin();
-        Utils.toast(err.message || 'กรุณาเข้าสู่ระบบผู้ดูแลอีกครั้ง', 'error');
+        showAdminError(Api.friendlyMessage(err));
       }
       throw err;
     });
@@ -55,39 +49,65 @@ var Admin = (function () {
       showAdminError('ระบบยังไม่ได้ตั้งค่าที่อยู่ของระบบหลังบ้าน กรุณาติดต่อผู้ดูแลระบบ');
       return;
     }
-    if (getToken()) {
+    if (isAdmin) {
       showPanel();
       App.renderYearOptions();
       switchTab('history');
-    } else {
-      showLogin();
+      return;
     }
+    showLogin();
+    if (Auth.isSignedIn()) checkAdmin(false);
   }
 
-  /* ---------------- login ---------------- */
-  function login() {
-    if (!Api.isConfigured()) {
-      showAdminError('ระบบยังไม่ได้ตั้งค่าที่อยู่ของระบบหลังบ้าน กรุณาติดต่อผู้ดูแลระบบ');
+  /** ให้ app.js เรียกเมื่อสถานะการลงชื่อเข้าใช้เปลี่ยน */
+  function onAuthChange(st) {
+    if (!initialized) return;
+    var idEl = $('#admin-identity');
+    if (!st.signedIn) {
+      isAdmin = false;
+      if (idEl) idEl.textContent = '—';
+      showLogin();
+      $('#btn-admin-check').classList.add('hidden');
       return;
     }
-    var token = $('#a-token').value.trim();
-    if (!token) {
-      showAdminError('กรุณากรอกรหัสผู้ดูแลระบบ');
-      return;
+    $('#btn-admin-check').classList.remove('hidden');
+    if (idEl && st.profile) {
+      idEl.textContent = (st.profile.name || '') + ' · ' + (st.profile.email || '');
+    }
+    // ตรวจสิทธิ์อัตโนมัติเมื่ออยู่ที่หน้าผู้ดูแลอยู่แล้ว
+    if ($('#view-admin').classList.contains('active') && !isAdmin) checkAdmin(false);
+  }
+
+  /* ---------------- ตรวจสอบสิทธิ์ผู้ดูแล ---------------- */
+  /**
+   * @param loud true = แสดงข้อความเมื่อไม่มีสิทธิ์ (กรณีผู้ใช้กดปุ่มเอง)
+   */
+  function checkAdmin(loud) {
+    if (!Auth.isSignedIn()) {
+      if (loud) showAdminError('กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อน');
+      return Promise.resolve(false);
     }
     App.showLoading(true);
-    Api.call('adminLogin', { adminToken: token })
-      .then(function () {
-        setToken(token);
-        $('#a-token').value = '';
-        $('#admin-error').classList.add('hidden');
-        showPanel();
-        App.renderYearOptions();
-        Utils.toast('เข้าสู่ระบบผู้ดูแลสำเร็จ', 'success');
-        switchTab('history');
+    return Api.call('getMyIdentity', {})
+      .then(function (res) {
+        isAdmin = !!(res.identity && res.identity.isAdmin);
+        if (isAdmin) {
+          $('#admin-error').classList.add('hidden');
+          showPanel();
+          App.renderYearOptions();
+          switchTab('history');
+          Utils.toast('เข้าสู่เมนูผู้ดูแลระบบแล้ว', 'success');
+        } else if (loud) {
+          showAdminError('บัญชี ' + (res.identity ? res.identity.email : '') +
+            ' ไม่มีสิทธิ์ผู้ดูแลระบบ หากต้องการสิทธิ์ กรุณาติดต่อผู้ดูแลระบบ');
+        }
+        return isAdmin;
       })
-      .catch(function (err) { showAdminError(Api.friendlyMessage(err)); })
-      .then(function () { App.showLoading(false); });
+      .catch(function (err) {
+        if (loud) showAdminError(Api.friendlyMessage(err));
+        return false;
+      })
+      .then(function (v) { App.showLoading(false); return v; });
   }
 
   function showAdminError(msg) {
@@ -97,9 +117,10 @@ var Admin = (function () {
   }
 
   function logout() {
-    setToken('');
+    isAdmin = false;
+    Auth.signOut();
     showLogin();
-    Utils.toast('ออกจากระบบผู้ดูแลแล้ว', 'info');
+    Utils.toast('ออกจากระบบแล้ว', 'info');
   }
 
   /* ---------------- tabs ---------------- */
@@ -115,6 +136,104 @@ var Admin = (function () {
     if (name === 'parking') loadParking();
     if (name === 'events') loadEvents();
     if (name === 'year') initYearTab();
+    if (name === 'system') loadRecordingWindow();
+  }
+
+  /* ---------------- ช่วงเวลาที่เปิดให้บันทึก + สถานะรายปี ---------------- */
+  function loadRecordingWindow() {
+    App.showLoading(true);
+    return adminCall('getRecordingWindow', {})
+      .then(function (res) {
+        var w = res.window || {};
+        $('#rw-start').value = w.startTime || '00:00';
+        $('#rw-end').value = w.endTime || '23:59';
+        $('#rw-before').value = String(w.daysBefore === undefined ? 0 : w.daysBefore);
+        $('#rw-after').value = String(w.daysAfter === undefined ? 0 : w.daysAfter);
+        $('#rw-enforce').value = w.enforce === false ? 'false' : 'true';
+        $('#window-summary').textContent = w.enforce === false
+          ? 'ขณะนี้ไม่ได้บังคับใช้ช่วงเวลา — บันทึกได้ทุกวัน (ใช้เฉพาะตอนทดสอบระบบ)'
+          : 'ขณะนี้เปิดให้บันทึกเฉพาะวันงาน ตั้งแต่ ' + w.startTime + ' ถึง ' + w.endTime +
+            ' น. (เปิดล่วงหน้า ' + w.daysBefore + ' วัน · ปิดหลังวันงาน ' + w.daysAfter + ' วัน)';
+        renderYearStatusTable(res.years || []);
+      })
+      .catch(function (err) { Utils.toast(Api.friendlyMessage(err), 'error'); })
+      .then(function () { App.showLoading(false); });
+  }
+
+  function saveRecordingWindow() {
+    var before = $('#rw-before').value.trim();
+    var after = $('#rw-after').value.trim();
+    if (before && !Utils.isInteger(before)) {
+      Utils.toast('จำนวนวันที่เปิดล่วงหน้าต้องเป็นตัวเลข', 'error'); return;
+    }
+    if (after && !Utils.isInteger(after)) {
+      Utils.toast('จำนวนวันที่ปิดหลังวันงานต้องเป็นตัวเลข', 'error'); return;
+    }
+    App.showLoading(true);
+    adminCall('setRecordingWindow', {
+      startTime: $('#rw-start').value,
+      endTime: $('#rw-end').value,
+      daysBefore: before,
+      daysAfter: after,
+      enforce: $('#rw-enforce').value
+    }).then(function (res) {
+      Utils.toast(res.message || 'บันทึกช่วงเวลาเรียบร้อย', 'success');
+      return loadRecordingWindow();
+    }).then(function () {
+      return App.refreshRecordingStatus();
+    }).catch(function (err) {
+      Utils.toast(Api.friendlyMessage(err), 'error');
+    }).then(function () { App.showLoading(false); });
+  }
+
+  function renderYearStatusTable(years) {
+    var tbody = $('#year-status-table tbody');
+    tbody.innerHTML = '';
+    if (!years.length) {
+      var tr0 = document.createElement('tr');
+      var td0 = Utils.el('td', 'empty-row', 'ยังไม่มีข้อมูลปีในระบบ');
+      td0.colSpan = 5; tr0.appendChild(td0); tbody.appendChild(tr0);
+      return;
+    }
+    years.forEach(function (y) {
+      var tr = document.createElement('tr');
+      tr.appendChild(Utils.el('td', '', y.yearBE + (y.isActiveYear ? ' (ปีที่ใช้งาน)' : '')));
+
+      var tdSt = document.createElement('td');
+      tdSt.appendChild(Utils.el('span', 'badge ' + (y.status === 'Active' ? 'st-normal' : 'st-none'),
+        y.status === 'Active' ? 'เปิดรับข้อมูล' : 'ปิดรับข้อมูล'));
+      tr.appendChild(tdSt);
+
+      tr.appendChild(Utils.el('td', '', y.eventCount + ' วัน'));
+
+      var tdCan = document.createElement('td');
+      tdCan.appendChild(Utils.el('span', 'badge ' + (y.canRecord ? 'st-normal' : 'st-high'),
+        y.canRecord ? 'บันทึกได้ (' + y.openEventCount + ' วัน)' : (y.reason || 'ยังไม่เปิด')));
+      tr.appendChild(tdCan);
+
+      var tdAct = document.createElement('td');
+      var isActive = y.status === 'Active';
+      var btn = Utils.el('button', 'btn btn-sm ' + (isActive ? 'btn-danger' : 'btn-secondary'),
+        isActive ? 'ปิดรับข้อมูล' : 'เปิดรับข้อมูล');
+      btn.type = 'button';
+      btn.addEventListener('click', function () {
+        var next = isActive ? 'Inactive' : 'Active';
+        if (!window.confirm('ยืนยัน' + (isActive ? 'ปิด' : 'เปิด') + 'รับข้อมูลของปี ' + y.yearBE +
+          '?\nข้อมูลเดิมทั้งหมดจะยังอยู่ครบถ้วน')) return;
+        App.showLoading(true);
+        adminCall('setYearStatus', { yearBE: y.yearBE, status: next })
+          .then(function (res) {
+            Utils.toast(res.message || 'อัปเดตสถานะปีเรียบร้อย', 'success');
+            return loadRecordingWindow();
+          })
+          .then(function () { return App.refreshRecordingStatus(); })
+          .catch(function (err) { Utils.toast(Api.friendlyMessage(err), 'error'); })
+          .then(function () { App.showLoading(false); });
+      });
+      tdAct.appendChild(btn);
+      tr.appendChild(tdAct);
+      tbody.appendChild(tr);
+    });
   }
 
   /* ---------------- ประวัติการบันทึก ---------------- */
@@ -572,10 +691,8 @@ var Admin = (function () {
 
   /* ---------------- bind ---------------- */
   function bind() {
-    $('#btn-admin-login').addEventListener('click', login);
-    $('#a-token').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); login(); }
-    });
+    Auth.renderButton($('#admin-gsi-button'));
+    $('#btn-admin-check').addEventListener('click', function () { checkAdmin(true); });
     $('#btn-admin-logout').addEventListener('click', logout);
 
     Utils.$$('.tab-btn').forEach(function (b) {
@@ -604,10 +721,11 @@ var Admin = (function () {
     $('#btn-create-year').addEventListener('click', createYear);
     $('#btn-set-active-year').addEventListener('click', setActiveYear);
 
+    $('#btn-save-window').addEventListener('click', saveRecordingWindow);
     $('#btn-health').addEventListener('click', runHealth);
     $('#btn-rebuild').addEventListener('click', rebuild);
     $('#btn-audit').addEventListener('click', loadAudit);
   }
 
-  return { onEnter: onEnter };
+  return { onEnter: onEnter, onAuthChange: onAuthChange };
 })();

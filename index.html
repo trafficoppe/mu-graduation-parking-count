@@ -16,8 +16,12 @@
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">P</div>
       <div class="brand-text">
-        <h1>ระบบบันทึกจำนวนรถยนต์ลานจอดรถ</h1>
-        <p id="header-sub">ช่วงงานพิธีพระราชทานปริญญาบัตร</p>
+        <h1>
+          <span class="t1">ระบบบันทึกจำนวนรถยนต์ลานจอดรถ</span>
+          <span class="t2">ช่วงงานพิธีพระราชทานปริญญาบัตร</span>
+          <span class="t3">มหาวิทยาลัยมหิดล</span>
+        </h1>
+        <p id="header-sub" class="sr-only">ช่วงงานพิธีพระราชทานปริญญาบัตร</p>
       </div>
     </div>
     <div class="header-meta">
@@ -50,39 +54,103 @@
       <p>ไฟล์ <code>config.js</code> ยังไม่ได้ระบุที่อยู่ของระบบหลังบ้าน (API URL) กรุณาติดต่อผู้ดูแลระบบ</p>
     </div>
 
+    <!-- สถานะการลงชื่อเข้าใช้ด้วยบัญชี Google -->
+    <div class="card auth-card" id="auth-card" aria-live="polite">
+      <div id="auth-signed-out">
+        <h2 class="card-title">ลงชื่อเข้าใช้เพื่อบันทึกข้อมูล</h2>
+        <p class="hint">
+          ระบบบันทึกผู้ที่กรอกข้อมูลทุกครั้ง จึงต้องลงชื่อเข้าใช้ด้วยบัญชี Google ก่อน
+          ใช้ได้ทั้งบัญชี Gmail ทั่วไป และบัญชีของมหาวิทยาลัย
+        </p>
+        <div id="gsi-button" class="gsi-host"></div>
+        <p class="hint" id="auth-hint">กำลังเตรียมระบบลงชื่อเข้าใช้...</p>
+        <div id="auth-error" class="alert alert-error hidden" role="alert"></div>
+      </div>
+
+      <div id="auth-signed-in" class="hidden">
+        <div class="identity">
+          <span class="identity-badge" aria-hidden="true">✓</span>
+          <div class="identity-text">
+            <p class="identity-label">เข้าสู่ระบบแล้ว</p>
+            <p class="identity-name" id="auth-name">—</p>
+            <p class="identity-email" id="auth-email">—</p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-signout">ออกจากระบบ</button>
+        </div>
+        <p class="hint" id="auth-role"></p>
+      </div>
+    </div>
+
     <div class="card" id="form-card">
       <h2 id="rec-title" class="card-title">บันทึกจำนวนรถยนต์</h2>
 
+      <!-- การ์ดสรุป "กำลังบันทึกลานใด" — อยู่บนสุดของแบบฟอร์มเพื่อกันการบันทึกผิดลาน -->
+      <div class="selection-card is-empty" id="selection-card" aria-live="polite">
+        <p class="sel-label" id="sel-label">ลานที่กำลังบันทึก</p>
+        <p class="sel-empty" id="sel-empty">กรุณาเลือกลานจอดรถ</p>
+        <div class="sel-detail hidden" id="sel-detail">
+          <div class="sel-main">
+            <span class="sel-no" id="sel-no">—</span>
+            <span class="sel-name" id="sel-name">—</span>
+          </div>
+          <p class="sel-meta" id="sel-meta">—</p>
+        </div>
+        <p class="sel-day" id="sel-day">—</p>
+      </div>
+
       <form id="record-form" novalidate autocomplete="on">
+        <!-- ขั้นที่ 1: ปีของงาน (ปุ่ม — รายการปีมาจากระบบหลังบ้านทั้งหมด) -->
         <div class="field">
-          <label for="f-year">ปีของงาน (พ.ศ.)</label>
-          <select id="f-year" name="year" class="input"></select>
+          <span class="field-label" id="year-label">
+            <span class="step-no" aria-hidden="true">1</span>ปีของงาน (พ.ศ.)
+          </span>
+          <div class="choice-row" id="year-buttons" role="group" aria-labelledby="year-label"></div>
+          <p class="hint" id="year-hint">กำลังโหลดรายการปี...</p>
+          <input type="hidden" id="f-year" name="year">
         </div>
 
+        <!-- ขั้นที่ 2: วันงาน (แสดงเฉพาะวันที่บันทึกได้ ณ เวลานั้น) -->
         <div class="field">
-          <label for="f-event">เลือกวันงาน <span class="req" aria-hidden="true">*</span></label>
-          <select id="f-event" name="event" class="input" required aria-required="true"></select>
+          <span class="field-label" id="event-label">
+            <span class="step-no" aria-hidden="true">2</span>เลือกวันงาน
+            <span class="req" aria-hidden="true">*</span>
+          </span>
+          <div class="choice-row choice-col" id="event-buttons" role="group"
+               aria-labelledby="event-label"></div>
           <p class="hint" id="f-event-date">—</p>
+          <input type="hidden" id="f-event" name="event">
         </div>
 
+        <!-- ขั้นที่ 3: ลานจอดรถ (เปิดดูรายการทั้งหมด หรือพิมพ์ค้นหาก็ได้) -->
         <div class="field">
-          <label for="f-parking-search">เลือกลานจอดรถ <span class="req" aria-hidden="true">*</span></label>
+          <label for="f-parking-search" id="parking-label">
+            <span class="step-no" aria-hidden="true">3</span>เลือกลานจอดรถ
+            <span class="req" aria-hidden="true">*</span>
+          </label>
           <div class="combo" id="parking-combo">
-            <input type="text" id="f-parking-search" class="input" role="combobox"
-                   aria-expanded="false" aria-controls="parking-listbox" aria-autocomplete="list"
-                   placeholder="พิมพ์ลำดับ ชื่อลาน หรือโซน เช่น 24 / อาคารเจรจา / Zone E"
-                   autocomplete="off" required aria-required="true">
-            <button type="button" class="combo-clear hidden" id="parking-clear"
-                    aria-label="ล้างลานจอดที่เลือก">ล้าง</button>
+            <div class="combo-input-row">
+              <input type="text" id="f-parking-search" class="input" role="combobox"
+                     aria-expanded="false" aria-controls="parking-listbox" aria-autocomplete="list"
+                     placeholder="พิมพ์ลำดับ ชื่อลาน หรือโซน เช่น 24 / อาคารเจรจา / Zone E"
+                     autocomplete="off" required aria-required="true">
+              <button type="button" class="combo-toggle" id="parking-toggle"
+                      aria-label="เปิดรายการลานจอดรถทั้งหมด" aria-controls="parking-listbox"
+                      aria-expanded="false">
+                <span class="caret" aria-hidden="true"></span>
+              </button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm combo-clear-btn hidden" id="parking-clear">
+              ล้างลานที่เลือก
+            </button>
             <ul id="parking-listbox" class="combo-list hidden" role="listbox"
                 aria-label="รายการลานจอดรถ"></ul>
           </div>
+          <p class="hint" id="parking-hint">กดปุ่มลูกศรเพื่อดูรายการทั้งหมด หรือพิมพ์เพื่อค้นหา</p>
           <input type="hidden" id="f-parking-id" name="parkingId">
-          <div id="parking-info" class="parking-info hidden" aria-live="polite"></div>
         </div>
 
         <div class="field">
-          <label for="f-count">จำนวนรถยนต์ที่ตรวจนับได้ (คัน) <span class="req" aria-hidden="true">*</span></label>
+          <label for="f-count"><span class="step-no" aria-hidden="true">4</span>จำนวนรถยนต์ที่ตรวจนับได้ (คัน) <span class="req" aria-hidden="true">*</span></label>
           <input type="text" id="f-count" name="vehicleCount" class="input input-number"
                  inputmode="numeric" pattern="[0-9]*" placeholder="0" required aria-required="true"
                  autocomplete="off">
@@ -94,19 +162,13 @@
           <input type="text" id="f-name" name="recorderName" class="input"
                  placeholder="เช่น นายสมชาย ใจดี" required aria-required="true"
                  autocomplete="name" maxlength="120">
+          <p class="hint">ระบบเติมชื่อจากบัญชี Google ให้อัตโนมัติ แก้ไขเป็นชื่อภาษาไทยได้</p>
         </div>
 
         <div class="field">
           <label for="f-phone">เบอร์โทรศัพท์ <span class="optional">(ไม่บังคับ)</span></label>
           <input type="tel" id="f-phone" name="phone" class="input" inputmode="tel"
                  placeholder="0812345678" autocomplete="tel" maxlength="20">
-        </div>
-
-        <div class="field">
-          <label for="f-email">อีเมล <span class="req" aria-hidden="true">*</span></label>
-          <input type="email" id="f-email" name="email" class="input" inputmode="email"
-                 placeholder="name@mahidol.ac.th" required aria-required="true"
-                 autocomplete="email" maxlength="150">
         </div>
 
         <div class="field">
@@ -131,7 +193,8 @@
         <button type="submit" id="btn-submit" class="btn btn-primary btn-lg">บันทึกข้อมูล</button>
 
         <p class="privacy">
-          ข้อมูลชื่อ-นามสกุล เบอร์โทรศัพท์ และอีเมล ใช้สำหรับการตรวจสอบและติดตามการบันทึกข้อมูลของระบบ
+          ระบบบันทึกชื่อ-นามสกุล เบอร์โทรศัพท์ และบัญชี Google ของผู้บันทึก
+          เพื่อการตรวจสอบและติดตามการบันทึกข้อมูล โดยผู้ใช้ทั่วไปจะไม่เห็นข้อมูลเหล่านี้ของผู้อื่น
         </p>
       </form>
     </div>
@@ -297,30 +360,30 @@
   <!-- ============ หน้าผู้ดูแลระบบ ============ -->
   <section id="view-admin" class="view" aria-labelledby="admin-title">
     <div class="card" id="admin-login-card">
-      <h2 id="admin-title" class="card-title">เข้าสู่ระบบผู้ดูแล</h2>
+      <h2 id="admin-title" class="card-title">สำหรับผู้ดูแลระบบ</h2>
       <p class="hint">
-        ส่วนนี้สำหรับผู้ดูแลระบบเท่านั้น ประกอบด้วยประวัติการบันทึก ข้อมูลผู้กรอก
-        และการตั้งค่าลานจอด/ปีงาน
+        ส่วนนี้ประกอบด้วยประวัติการบันทึก ข้อมูลผู้กรอก และการตั้งค่าลานจอด/ปีงาน
+        เปิดให้เฉพาะบัญชี Google ที่อยู่ในรายชื่อผู้ดูแลระบบเท่านั้น
       </p>
-      <div class="field">
-        <label for="a-token">รหัสผู้ดูแลระบบ</label>
-        <input type="password" id="a-token" class="input" autocomplete="current-password"
-               placeholder="กรอกรหัสที่ได้รับจากผู้ดูแลระบบ">
-      </div>
+      <div id="admin-gsi-button" class="gsi-host"></div>
       <div id="admin-error" class="alert alert-error hidden" role="alert"></div>
-      <button type="button" class="btn btn-primary btn-lg" id="btn-admin-login">เข้าสู่ระบบ</button>
+      <button type="button" class="btn btn-primary btn-lg hidden" id="btn-admin-check">
+        ตรวจสอบสิทธิ์ผู้ดูแลระบบ
+      </button>
       <p class="privacy">
-        รหัสนี้เป็นรหัสร่วมของหน่วยงาน (Shared Secret) ใช้เพื่อจำกัดการเข้าถึงเมนูผู้ดูแล
-        ไม่ใช่การยืนยันตัวบุคคลรายคน หากต้องการความปลอดภัยสูงกว่านี้
-        ให้ผู้ดูแลระบบ Deploy Web App ชุดที่สองแบบจำกัดเฉพาะบัญชีในองค์กร
+        สิทธิ์ผู้ดูแลตรวจสอบที่เซิร์ฟเวอร์จากอีเมลของบัญชี Google ที่ยืนยันแล้ว
+        เทียบกับรายชื่อที่เก็บไว้ในระบบหลังบ้าน ไม่สามารถกำหนดสิทธิ์จากหน้าเว็บได้
       </p>
     </div>
 
     <div id="admin-panel" class="hidden">
       <div class="card">
         <div class="admin-head">
-          <h2 class="card-title">เมนูผู้ดูแลระบบ</h2>
-          <button type="button" class="btn btn-ghost btn-sm" id="btn-admin-logout">ออกจากระบบผู้ดูแล</button>
+          <div>
+            <h2 class="card-title">เมนูผู้ดูแลระบบ</h2>
+            <p class="hint" id="admin-identity">—</p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-admin-logout">ออกจากระบบ</button>
         </div>
         <div class="tab-row" role="tablist">
           <button class="tab-btn active" data-tab="history" role="tab" type="button">ประวัติการบันทึก</button>
@@ -557,6 +620,58 @@
 
       <!-- ระบบ -->
       <div class="card admin-tab hidden" id="tab-system">
+        <h3 class="card-title">ช่วงเวลาที่เปิดให้บันทึกข้อมูล</h3>
+        <p class="hint">
+          ระบบจะเปิดให้เจ้าหน้าที่บันทึกได้เฉพาะ "วันงานที่อยู่ในช่วงเวลานี้" เท่านั้น
+          และตรวจสอบซ้ำที่เซิร์ฟเวอร์ทุกครั้ง จึงแก้ไขด้วยการแก้หน้าเว็บไม่ได้
+        </p>
+        <div class="filter-row">
+          <div class="field">
+            <label for="rw-start">เวลาเริ่มรับข้อมูล</label>
+            <input type="time" id="rw-start" class="input">
+          </div>
+          <div class="field">
+            <label for="rw-end">เวลาปิดรับข้อมูล</label>
+            <input type="time" id="rw-end" class="input">
+          </div>
+          <div class="field">
+            <label for="rw-before">เปิดล่วงหน้า (วัน)</label>
+            <input type="text" id="rw-before" class="input" inputmode="numeric" placeholder="0">
+          </div>
+          <div class="field">
+            <label for="rw-after">ปิดหลังวันงาน (วัน)</label>
+            <input type="text" id="rw-after" class="input" inputmode="numeric" placeholder="0">
+          </div>
+          <div class="field">
+            <label for="rw-enforce">บังคับใช้ช่วงเวลา</label>
+            <select id="rw-enforce" class="input">
+              <option value="true">บังคับใช้ (แนะนำ)</option>
+              <option value="false">ไม่บังคับ (เปิดให้บันทึกได้ทุกวัน)</option>
+            </select>
+          </div>
+          <div class="field field-btn">
+            <button type="button" class="btn btn-primary" id="btn-save-window">บันทึกช่วงเวลา</button>
+          </div>
+        </div>
+        <p class="hint" id="window-summary">—</p>
+
+        <h3 class="card-title">สถานะการเปิดรับข้อมูลรายปี</h3>
+        <p class="hint">ปีที่ปิดรับข้อมูลแล้วจะแสดงเป็นปุ่มสีจางและกดไม่ได้ในหน้าบันทึก แต่ข้อมูลเดิมยังอยู่ครบ</p>
+        <div class="table-scroll">
+          <table class="data-table" id="year-status-table">
+            <thead>
+              <tr>
+                <th scope="col">ปี (พ.ศ.)</th>
+                <th scope="col">สถานะ</th>
+                <th scope="col">วันงาน</th>
+                <th scope="col">บันทึกได้ขณะนี้</th>
+                <th scope="col">จัดการ</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
         <h3 class="card-title">ตรวจสอบระบบ</h3>
         <button type="button" class="btn btn-secondary" id="btn-health">ตรวจสอบการเชื่อมต่อ (Health Check)</button>
         <button type="button" class="btn btn-secondary" id="btn-rebuild">สร้างสรุปข้อมูลใหม่</button>
@@ -597,6 +712,7 @@
 
 <script src="config.js"></script>
 <script src="utils.js"></script>
+<script src="auth.js"></script>
 <script src="api.js"></script>
 <script src="app.js"></script>
 <script src="dashboard.js"></script>
