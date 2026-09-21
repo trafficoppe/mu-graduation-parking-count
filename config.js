@@ -13,7 +13,7 @@
  */
 var APP_CONFIG = {
   // ตัวอย่าง: "https://script.google.com/macros/s/AKfycbxxxxxxxxxxxxxxxxxxxxxx/exec"
-  API_URL: "REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL",
+API_URL: "https://script.google.com/macros/s/AKfycbzlJwPufZeg2Iu5leXB7sgJsSeMgL0QKVwGRZ3mO8DDY6CDfd61izD1gzLJM6lWELCH/exec",
 
   DEFAULT_YEAR: 2569,
   APP_VERSION: "1.2.0",
