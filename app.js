@@ -31,6 +31,7 @@ var App = (function () {
     serverTime: '',
     requestId: null,
     submitting: false,
+    submitAttempt: false,   // true เฉพาะช่วงที่ผู้ใช้เพิ่งกดปุ่มบันทึก (ใช้ตัดสินใจเด้ง popup)
     ready: false
   };
 
@@ -347,12 +348,20 @@ var App = (function () {
   /** เปิด/ปิดปุ่มบันทึกตามความพร้อมของปีและวันงาน */
   function updateSubmitAvailability() {
     var btn = $('#btn-submit');
-    if (!Api.isConfigured()) { btn.disabled = true; return; }
+    // ============================================================
+    // เวอร์ชัน 1.2.2 — ปุ่ม "บันทึกข้อมูล" ต้องกดได้เสมอ
+    // ============================================================
+    // เดิมปุ่มถูกปิด (disabled) เมื่อยังไม่ได้ลงชื่อเข้าใช้ หรือยังไม่มีวันงานเปิด
+    // ทำให้ผู้ใช้กดแล้วไม่มีอะไรเกิดขึ้น และไม่รู้ว่าทำไมบันทึกไม่ได้
+    //
+    // ตอนนี้ปุ่มจะถูกปิดเฉพาะ "ระหว่างกำลังส่งข้อมูลจริง" เท่านั้น (กันกดซ้ำ)
+    // เหตุผลอื่น ๆ ทั้งหมดจะอธิบายด้วย popup ตอนที่ผู้ใช้กด
+    btn.disabled = !!state.submitting;
+
     var hasEvent = !!currentEvent();
     var signedIn = Auth.isSignedIn();
-    btn.disabled = !hasEvent || !signedIn;
-    btn.title = !signedIn ? 'กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อน'
-      : (!hasEvent ? 'ยังไม่มีวันงานที่เปิดให้บันทึกในขณะนี้' : '');
+    btn.title = !signedIn ? 'กดปุ่มเพื่อดูขั้นตอนการลงชื่อเข้าใช้ด้วยบัญชี Google'
+      : (!hasEvent ? 'ขณะนี้ยังไม่มีวันงานที่เปิดให้บันทึก — กดปุ่มเพื่อดูรายละเอียด' : '');
   }
 
   /* ================= การลงชื่อเข้าใช้ด้วย Google ================= */
@@ -607,6 +616,12 @@ var App = (function () {
         if (f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }
     }
+    // เวอร์ชัน 1.2.2: ถ้าผู้ใช้เพิ่งกดปุ่ม "บันทึกข้อมูล" ให้เด้ง popup อธิบายเหตุผลด้วย
+    // เพื่อไม่ให้เกิดอาการ "กดแล้วเงียบ ไม่รู้ว่าทำไมบันทึกไม่ได้"
+    // ข้อความที่แสดงเป็นข้อความสำหรับผู้ใช้เท่านั้น ไม่มี token / ความลับ / stack trace
+    if (state.submitAttempt) {
+      try { window.alert(message); } catch (e) {}
+    }
   }
 
   function clearFormError() {
@@ -617,17 +632,33 @@ var App = (function () {
   function validateForm() {
     clearFormError();
 
-    // ต้องลงชื่อเข้าใช้ก่อนเสมอ (เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นอยู่แล้ว)
-    if (!Auth.isSignedIn()) {
-      showFormError('กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อนบันทึกข้อมูล');
+    // ---------- ลำดับที่ 1: ระบบลงชื่อเข้าใช้พร้อมใช้งานหรือยัง ----------
+    var authState = Auth.getState();
+    if (!authState.configured) {
+      showFormError('ระบบลงชื่อเข้าใช้ยังไม่ได้ตั้งค่า กรุณาติดต่อผู้ดูแลระบบ');
+      return null;
+    }
+    if (!authState.ready) {
+      showFormError('ระบบกำลังเตรียมการลงชื่อเข้าใช้ด้วย Google กรุณารอสักครู่แล้วกดบันทึกอีกครั้ง');
+      return null;
+    }
+
+    // ---------- ลำดับที่ 2: ต้องลงชื่อเข้าใช้ และการลงชื่อต้องยังไม่หมดอายุ ----------
+    // (เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นอยู่แล้ว — ตรงนี้เพื่อให้ผู้ใช้รู้เหตุผลทันที)
+    var wasSignedIn = Auth.isSignedIn();
+    if (!Auth.getToken()) {   // getToken() จะล้างสถานะให้เองถ้าหมดอายุแล้ว
+      showFormError(wasSignedIn
+        ? 'การลงชื่อเข้าใช้หมดอายุ กรุณาลงชื่อเข้าใช้ด้วย Google อีกครั้ง'
+        : 'กรุณาลงชื่อเข้าใช้ด้วย Google ก่อนบันทึกข้อมูล');
       Auth.promptSignIn();
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return null;
     }
 
+    // ---------- ลำดับที่ 3: ต้องมีวันงานที่เปิดให้บันทึก ----------
     var ev = currentEvent();
     if (!ev) {
-      showFormError('ขณะนี้ไม่มีวันงานที่เปิดให้บันทึกข้อมูล กรุณาตรวจสอบวันและเวลา หรือติดต่อผู้ดูแลระบบ');
+      showFormError('ขณะนี้ยังไม่มีวันงานที่เปิดให้บันทึกข้อมูล กรุณาตรวจสอบวันและเวลา หรือติดต่อผู้ดูแลระบบ');
       return null;
     }
     if (!ev.isOpenNow) {
@@ -712,23 +743,31 @@ var App = (function () {
 
   function handleSubmit(e) {
     if (e) e.preventDefault();
+
+    // กรณีที่ 7: กำลังส่งข้อมูลอยู่จริง — ปุ่มถูกปิดไว้แล้ว กันกดซ้ำ/ดับเบิลคลิก
     if (state.submitting) return;
+
+    // ตั้งแต่จุดนี้ไป ทุกข้อความที่ส่งผ่าน showFormError จะเด้ง popup ให้ผู้ใช้เห็นด้วย
+    state.submitAttempt = true;
 
     if (!Api.isConfigured()) {
       showFormError('ระบบยังไม่ได้ตั้งค่าที่อยู่ของระบบหลังบ้าน กรุณาติดต่อผู้ดูแลระบบ');
+      state.submitAttempt = false;
       return;
     }
     if (navigator.onLine === false) {
       showFormError('ขณะนี้อุปกรณ์ไม่ได้เชื่อมต่ออินเทอร์เน็ต กรุณาตรวจสอบสัญญาณแล้วกดบันทึกอีกครั้ง');
+      state.submitAttempt = false;
       return;
     }
 
     var payload = validateForm();
-    if (!payload) return;
+    if (!payload) { state.submitAttempt = false; return; }
 
     var overCapacity = checkCapacityWarning();
     if (!window.confirm(buildConfirmMessage(payload, overCapacity))) {
       if (overCapacity) $('#f-count').focus();
+      state.submitAttempt = false;
       return;
     }
     if (overCapacity) payload.confirmOverCapacity = true;
@@ -763,7 +802,10 @@ var App = (function () {
           refreshRecordingStatus();
         }
       })
-      .then(function () { setSubmitting(false); });
+      .then(function () {
+        setSubmitting(false);
+        state.submitAttempt = false;
+      });
   }
 
   function saveRecorderIfWanted(payload) {
@@ -996,7 +1038,7 @@ var App = (function () {
     if (!Api.isConfigured()) {
       $('#setup-warning').classList.remove('hidden');
       setConnStatus('error', 'ยังไม่ได้ตั้งค่าระบบ');
-      $('#btn-submit').disabled = true;
+      // ไม่ปิดปุ่มบันทึก — ถ้าผู้ใช้กด ระบบจะเด้ง popup อธิบายว่ายังไม่ได้ตั้งค่า
       $('#year-hint').textContent = 'ยังไม่ได้ตั้งค่าที่อยู่ของระบบหลังบ้าน';
       return;
     }

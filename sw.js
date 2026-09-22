@@ -10,7 +10,7 @@
  *  - ไม่มี Background Sync / Offline Queue ในเวอร์ชันนี้
  *    ระบบเลือกแจ้งเตือนผู้ใช้ให้กดบันทึกใหม่เมื่อมีสัญญาณ ซึ่งปลอดภัยกว่าการคิวอัตโนมัติ
  */
-var CACHE_NAME = 'gpvcs-shell-v1.2.0';
+var CACHE_NAME = 'gpvcs-shell-v1.2.2';
 var SHELL_FILES = [
   './',
   './index.html',

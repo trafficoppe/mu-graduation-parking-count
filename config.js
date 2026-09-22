@@ -13,10 +13,10 @@
  */
 var APP_CONFIG = {
   // ตัวอย่าง: "https://script.google.com/macros/s/AKfycbxxxxxxxxxxxxxxxxxxxxxx/exec"
-API_URL: "https://script.google.com/macros/s/AKfycbzlJwPufZeg2Iu5leXB7sgJsSeMgL0QKVwGRZ3mO8DDY6CDfd61izD1gzLJM6lWELCH/exec",
+  API_URL: "REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL",
 
   DEFAULT_YEAR: 2569,
-  APP_VERSION: "1.2.0",
+  APP_VERSION: "1.2.2",
 
   // เวลาที่รอคำตอบจากเซิร์ฟเวอร์ (มิลลิวินาที)
   REQUEST_TIMEOUT_MS: 30000,
