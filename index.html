@@ -14,7 +14,10 @@
 <header class="app-header">
   <div class="wrap">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">P</div>
+      <div class="brand-mark" id="brand-mark" aria-hidden="true">
+        <img id="brand-logo" class="brand-logo hidden" alt="" decoding="async">
+        <span id="brand-fallback" class="brand-fallback">P</span>
+      </div>
       <div class="brand-text">
         <h1>
           <span class="t1">ระบบบันทึกจำนวนรถยนต์ลานจอดรถ</span>
@@ -25,6 +28,10 @@
       </div>
     </div>
     <div class="header-meta">
+      <div class="meta-item clock-item" id="clock-item">
+        <span class="meta-label">เวลาปัจจุบัน (เวลาระบบ)</span>
+        <span class="clock-value" id="server-clock" role="timer" aria-live="off">--:--:--</span>
+      </div>
       <div class="meta-item">
         <span class="meta-label">วันงานปัจจุบัน</span>
         <span class="meta-value" id="header-event">กำลังโหลด...</span>
@@ -121,10 +128,28 @@
           <input type="hidden" id="f-event" name="event">
         </div>
 
-        <!-- ขั้นที่ 3: ลานจอดรถ (เปิดดูรายการทั้งหมด หรือพิมพ์ค้นหาก็ได้) -->
+        <!-- ขั้นที่ 3: รอบการนับรถ (เพิ่มในเวอร์ชัน 1.3.0) -->
+        <div class="field">
+          <span class="field-label" id="round-label">
+            <span class="step-no" aria-hidden="true">3</span>รอบการนับข้อมูล
+            <span class="req" aria-hidden="true">*</span>
+          </span>
+          <div class="round-row" id="round-buttons" role="group" aria-labelledby="round-label"></div>
+
+          <!-- นับถอยหลังของรอบที่เปิดอยู่ — แยกจากนาฬิกาปัจจุบันอย่างชัดเจน -->
+          <div class="countdown-box" id="countdown-box" aria-live="polite">
+            <span class="cd-label" id="countdown-label">ปิดรับใน</span>
+            <span class="cd-value" id="countdown-value">--:--:--</span>
+          </div>
+
+          <p class="hint" id="round-hint">กำลังตรวจสอบรอบการนับข้อมูล...</p>
+          <input type="hidden" id="f-round" name="roundId">
+        </div>
+
+        <!-- ขั้นที่ 4: ลานจอดรถ (เปิดดูรายการทั้งหมด หรือพิมพ์ค้นหาก็ได้) -->
         <div class="field">
           <label for="f-parking-search" id="parking-label">
-            <span class="step-no" aria-hidden="true">3</span>เลือกลานจอดรถ
+            <span class="step-no" aria-hidden="true">4</span>เลือกลานจอดรถ
             <span class="req" aria-hidden="true">*</span>
           </label>
           <div class="combo" id="parking-combo">
@@ -150,7 +175,7 @@
         </div>
 
         <div class="field">
-          <label for="f-count"><span class="step-no" aria-hidden="true">4</span>จำนวนรถยนต์ที่ตรวจนับได้ (คัน) <span class="req" aria-hidden="true">*</span></label>
+          <label for="f-count"><span class="step-no" aria-hidden="true">5</span>จำนวนรถยนต์ที่ตรวจนับได้ (คัน) <span class="req" aria-hidden="true">*</span></label>
           <input type="text" id="f-count" name="vehicleCount" class="input input-number"
                  inputmode="numeric" pattern="[0-9]*" placeholder="0" required aria-required="true"
                  autocomplete="off">
@@ -174,7 +199,7 @@
         <div class="field">
           <label for="f-note">หมายเหตุ <span class="optional">(ไม่บังคับ)</span></label>
           <textarea id="f-note" name="note" class="input" rows="2" maxlength="500"
-                    placeholder="เช่น ตรวจนับรอบ 10:00 น."></textarea>
+                    placeholder="เช่น จำนวนรถในลานมีปริมาณมาก / รถเต็มลาน / รถมาจอดที่ลานน้อย"></textarea>
         </div>
 
         <div class="checks">
@@ -203,8 +228,9 @@
     <div class="card success-card hidden" id="success-card" role="status" aria-live="polite">
       <div class="success-head">
         <span class="success-icon" aria-hidden="true">✓</span>
-        <h2>บันทึกข้อมูลสำเร็จ</h2>
+        <h2 id="success-title">บันทึกข้อมูลสำเร็จ</h2>
       </div>
+      <p class="success-followup hidden" id="success-followup"></p>
       <dl class="success-list" id="success-list"></dl>
       <button type="button" class="btn btn-primary btn-lg" id="btn-next">บันทึกข้อมูลลานต่อไป</button>
       <button type="button" class="btn btn-ghost" id="btn-view-latest">ดูข้อมูลล่าสุดทั้งหมด</button>
