@@ -128,14 +128,25 @@ var Utils = (function () {
     return /^[^\s@,;:<>()\[\]\\]+@[^\s@.]+(\.[^\s@.]+)+$/.test(String(email).trim());
   }
 
+  /**
+   * ตรวจเบอร์โทรศัพท์ (ปรับกติกาให้เข้มขึ้นในเวอร์ชัน 1.3.1)
+   * ต้องเป็นตัวเลข 0-9 จำนวน 10 หลักพอดีเท่านั้น (^\d{10}$)
+   * ใช้กติกาเดียวกับฝั่งเซิร์ฟเวอร์ (Utils.gs -> normalizePhone) เป๊ะ ๆ
+   * คืนค่าเป็นข้อความเสมอ เลข 0 ตัวหน้าจึงไม่หาย
+   * คืน '' ถ้าว่าง (ไม่บังคับกรอก) · คืน null ถ้ารูปแบบไม่ถูกต้อง
+   */
   function normalizePhone(v) {
-    var s = String(v || '').trim();
-    if (!s) return '';
-    s = s.replace(/[\s\-().]/g, '');
-    if (/^\+66\d{9}$/.test(s)) s = '0' + s.substring(3);
-    else if (/^66\d{9}$/.test(s)) s = '0' + s.substring(2);
-    if (/^0\d{9}$/.test(s)) return s;
+    if (v === null || v === undefined) return '';
+    var s = String(v).trim();
+    if (s === '') return '';
+    if (/^\d{10}$/.test(s)) return s;
     return null;
+  }
+
+  /** ตัดให้เหลือเฉพาะตัวเลข และยาวไม่เกิน 10 หลัก (ใช้ตอนผู้ใช้พิมพ์/วาง) */
+  function digitsOnly10(v) {
+    var s = String(v === null || v === undefined ? '' : v).replace(/[^0-9]/g, '');
+    return s.length > 10 ? s.substring(0, 10) : s;
   }
 
   function isInteger(v) {
@@ -209,7 +220,8 @@ var Utils = (function () {
     uuid: uuid, getDeviceId: getDeviceId,
     safeGet: safeGet, safeSet: safeSet, safeRemove: safeRemove,
     getJson: getJson, setJson: setJson,
-    isValidEmail: isValidEmail, normalizePhone: normalizePhone, isInteger: isInteger,
+    isValidEmail: isValidEmail, normalizePhone: normalizePhone,
+    digitsOnly10: digitsOnly10, isInteger: isInteger,
     toCsv: toCsv, downloadCsv: downloadCsv, toast: toast, debounce: debounce,
     statusClass: statusClass
   };

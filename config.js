@@ -16,7 +16,7 @@ var APP_CONFIG = {
 API_URL: "https://script.google.com/macros/s/AKfycbzlJwPufZeg2Iu5leXB7sgJsSeMgL0QKVwGRZ3mO8DDY6CDfd61izD1gzLJM6lWELCH/exec",
 
   DEFAULT_YEAR: 2569,
-  APP_VERSION: "1.3.0",
+  APP_VERSION: "1.3.1",
 
   // เวลาที่รอคำตอบจากเซิร์ฟเวอร์ (มิลลิวินาที)
   REQUEST_TIMEOUT_MS: 30000,

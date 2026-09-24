@@ -20,6 +20,13 @@
  *    ผู้ใช้แก้นาฬิกาเครื่องตัวเองแล้วหน้าจออาจคลาดเคลื่อนชั่วคราว
  *    แต่ "บันทึกไม่ผ่าน" อยู่ดี เพราะเซิร์ฟเวอร์ตรวจด้วยนาฬิกาของตัวเองทุกครั้ง
  *  - รอบเปลี่ยนเองตามเวลาจริงโดยไม่ต้องรีเฟรชหน้า (เช่น 10:59:59 -> 11:00:00)
+ *
+ * เวอร์ชัน 1.3.1 — สถานะ "กรอกข้อมูลเรียบร้อยแล้ว" รายลาน:
+ *  - สถานะของแต่ละลานมาจากข้อมูลจริงในระบบหลังบ้านเท่านั้น (action getRoundProgress)
+ *    ไม่ใช้ localStorage หรือสถานะในเบราว์เซอร์เป็นแหล่งข้อมูลหลักเด็ดขาด
+ *  - กุญแจของสถานะคือ วันงาน (EventID) + รอบ (RoundID) + ลานจอด (ParkingID)
+ *    คนละวันหรือคนละรอบ จึงเป็นคนละสถานะเสมอ
+ *  - เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นทุกครั้งที่กดบันทึก (ERR ALREADY_RECORDED)
  */
 var App = (function () {
   'use strict';
@@ -42,6 +49,11 @@ var App = (function () {
     selectedRoundId: '',
     serverOffsetMs: 0,       // เวลาเซิร์ฟเวอร์ - เวลาเครื่องผู้ใช้ (มิลลิวินาที)
     serverClockReady: false,
+    // ---- เวอร์ชัน 1.3.1: สถานะ "กรอกแล้ว/ยังไม่กรอก" ของทุกลาน ----
+    progress: null,          // { eventId, roundId, total, completed, pending, byLot: {ParkingID: {...}} }
+    progressLoading: false,
+    editMode: false,         // true เมื่อเจ้าหน้าที่ยืนยันขอแก้ไขข้อมูลลานที่บันทึกไว้แล้ว
+    editLotId: '',
     requestId: null,
     submitting: false,
     submitAttempt: false,   // true เฉพาะช่วงที่ผู้ใช้เพิ่งกดปุ่มบันทึก (ใช้ตัดสินใจเด้ง popup)
@@ -54,6 +66,12 @@ var App = (function () {
   var clockTimer = null;
   var lastTickWall = 0;      // ใช้ตรวจจับว่าผู้ใช้เปลี่ยนนาฬิกาเครื่อง/เครื่องหลับ
   var lastRoundSignature = '';
+  var lastProgressKey = '';  // 'EventID|RoundID' ที่โหลดสถานะลานไว้แล้ว
+  var lastLotQuery = '';     // คำค้นหาล่าสุดของรายการลาน (ใช้ตอนวาดใหม่)
+
+  /** ข้อความแจ้งเรื่องเบอร์โทรศัพท์ — ใช้ที่เดียวทั้งไฟล์ ให้ตรงกับฝั่งเซิร์ฟเวอร์ */
+  var PHONE_MESSAGE =
+    'กรุณาตรวจสอบเบอร์โทรศัพท์อีกครั้ง เบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก กรุณากรอกข้อมูลใหม่อีกครั้ง';
 
   /* ================= การนำทางระหว่างหน้า ================= */
   function switchView(name) {
@@ -172,6 +190,16 @@ var App = (function () {
     renderYearOptions();
     renderEventButtons(res.defaultEventId);
     updateHeaderEvent();
+
+    // สถานะ "กรอกแล้ว/ยังไม่กรอก" ของทุกลาน มากับ getBootstrap แล้ว (เวอร์ชัน 1.3.1)
+    // ตั้งค่าไว้ก่อน เพื่อไม่ให้ยิงคำขอซ้ำอีกรอบตอนวาดปุ่มรอบ
+    if (res.roundProgress && res.roundProgress.eventId) {
+      lastProgressKey = res.roundProgress.eventId + '|' + (res.roundProgress.roundId || '');
+      applyRoundProgress(res.roundProgress);
+    } else {
+      lastProgressKey = '';
+      applyRoundProgress(null);
+    }
 
     // รอบการนับรถของวันงานที่เลือก (มาพร้อม getBootstrap แล้ว ไม่ต้องยิงเพิ่ม)
     if (res.roundStatus && res.roundStatus.eventId &&
@@ -564,7 +592,8 @@ var App = (function () {
 
     // เลือกรอบที่เปิดอยู่ให้อัตโนมัติเสมอ และห้ามค้างอยู่ที่รอบที่ปิดไปแล้ว
     var newSelected = act ? act.roundId : '';
-    if (newSelected !== state.selectedRoundId) {
+    var roundSelectionChanged = (newSelected !== state.selectedRoundId);
+    if (roundSelectionChanged) {
       state.selectedRoundId = newSelected;
       $('#f-round').value = newSelected;
     }
@@ -620,6 +649,11 @@ var App = (function () {
       }
     }
     updateCountdown();
+
+    // เวอร์ชัน 1.3.1 — เปลี่ยนรอบเมื่อไร ให้โหลดสถานะลานของรอบนั้นใหม่ทันที
+    ensureProgressForContext();
+    renderProgressSummary();
+    if (roundSelectionChanged) renderLotList(lastLotQuery);
   }
 
   /** นับถอยหลังของรอบที่เปิดอยู่ (แยกจากนาฬิกาปัจจุบันอย่างชัดเจน) */
@@ -824,6 +858,209 @@ var App = (function () {
       .then(function () { showLoading(false); });
   }
 
+  /* ==================================================================
+     เวอร์ชัน 1.3.1 — สถานะ "กรอกข้อมูลเรียบร้อยแล้ว" ของแต่ละลาน
+     ==================================================================
+
+     แหล่งข้อมูล: ระบบหลังบ้านเท่านั้น (action getRoundProgress)
+     กุญแจ:       วันงาน (EventID) + รอบ (RoundID) + ลานจอด (ParkingID)
+
+     หน้าเว็บเก็บผลไว้ในหน่วยความจำเพื่อวาดหน้าจอเท่านั้น
+     ไม่เคยเก็บลง localStorage และไม่ใช้เป็นตัวตัดสินแทนเซิร์ฟเวอร์
+     ทุกครั้งที่กดบันทึก เซิร์ฟเวอร์ตรวจซ้ำด้วยข้อมูลจริงในชีตเสมอ
+  */
+
+  /** แปลงผลจากเซิร์ฟเวอร์เป็นรูปแบบที่หน้าจอใช้ */
+  function applyRoundProgress(rp) {
+    if (!rp || !rp.items) {
+      state.progress = null;
+    } else {
+      var byLot = {};
+      rp.items.forEach(function (it) { byLot[it.parkingId] = it; });
+      state.progress = {
+        eventId: rp.eventId || '',
+        roundId: rp.roundId || '',
+        total: rp.total || 0,
+        completed: rp.completed || 0,
+        pending: rp.pending || 0,
+        byLot: byLot
+      };
+    }
+    renderProgressSummary();
+    renderLotList(lastLotQuery);
+  }
+
+  /** ข้อมูลสถานะของลานหนึ่ง (null = ไม่มีข้อมูล) */
+  function lotProgress(parkingId) {
+    if (!state.progress || !parkingId) return null;
+    return state.progress.byLot[parkingId] || null;
+  }
+
+  /** ลานนี้ "กรอกข้อมูลแล้ว" ในวันงาน+รอบปัจจุบันหรือไม่ */
+  function isLotCompleted(parkingId) {
+    var p = lotProgress(parkingId);
+    return !!(p && p.completed);
+  }
+
+  /** ระบบกำลังติดตามสถานะการกรอกอยู่หรือไม่ (ต้องมีรอบที่เลือกไว้) */
+  function progressActive() {
+    return !!(state.roundsConfigured && state.selectedRoundId);
+  }
+
+  /** โหลดสถานะของทุกลานสำหรับวันงาน+รอบปัจจุบัน — คำขอเดียวได้ครบทุกลาน */
+  function loadRoundProgress() {
+    var eventId = $('#f-event').value;
+    var roundId = state.selectedRoundId || '';
+
+    if (!progressActive() || !eventId || !Api.isConfigured() || navigator.onLine === false) {
+      applyRoundProgress(null);
+      return Promise.resolve();
+    }
+
+    state.progressLoading = true;
+    renderProgressSummary();
+
+    return Api.call('getRoundProgress',
+      { yearBE: state.currentYear, eventId: eventId, roundId: roundId })
+      .then(function (res) {
+        // ถ้าผู้ใช้เปลี่ยนวันงาน/รอบระหว่างรอคำตอบ ให้ทิ้งผลเก่าไป
+        if (res.eventId !== $('#f-event').value ||
+            String(res.roundId || '') !== String(state.selectedRoundId || '')) {
+          return;
+        }
+        applyRoundProgress(res);
+      })
+      .catch(function (err) {
+        console.warn('[progress]', err && err.message);
+        applyRoundProgress(null);
+      })
+      .then(function () {
+        state.progressLoading = false;
+        renderProgressSummary();
+      });
+  }
+
+  /**
+   * โหลดสถานะใหม่ก็ต่อเมื่อ "วันงานหรือรอบเปลี่ยนไปจริง ๆ" เท่านั้น
+   * ป้องกันไม่ให้ยิงคำขอซ้ำทุกวินาทีตอนนาฬิกาเดิน และไม่ทำให้หน้าจอกระตุก
+   */
+  function ensureProgressForContext() {
+    var key = $('#f-event').value + '|' + (state.selectedRoundId || '');
+    if (key === lastProgressKey) return;
+    lastProgressKey = key;
+    clearEditMode();
+    loadRoundProgress();
+  }
+
+  /** อัปเดตสถานะลานทันทีหลังบันทึกสำเร็จ โดยไม่ต้องรอคำขอใหม่ */
+  function markLotCompletedLocally(rec) {
+    if (!state.progress || !rec || !rec.parkingId) return;
+    var pid = rec.parkingId;
+    var wasCompleted = isLotCompleted(pid);
+    state.progress.byLot[pid] = {
+      parkingId: pid,
+      parkingNo: rec.parkingNo,
+      completed: true,
+      vehicleCount: rec.vehicleCount,
+      capacity: rec.capacity,
+      occupancyPercent: rec.occupancyPercent,
+      capacityStatus: rec.capacityStatus,
+      lastUpdate: rec.serverTimestamp
+    };
+    if (!wasCompleted) {
+      state.progress.completed += 1;
+      state.progress.pending = Math.max(0, state.progress.pending - 1);
+    }
+    renderProgressSummary();
+    renderLotList(lastLotQuery);
+  }
+
+  /** ออกจากโหมดแก้ไขข้อมูลที่บันทึกไว้แล้ว */
+  function clearEditMode() {
+    state.editMode = false;
+    state.editLotId = '';
+  }
+
+  /** แถบสรุป: กรอกแล้วกี่ลาน / ยังไม่กรอกกี่ลาน ของวันงาน+รอบที่เลือกอยู่ */
+  function renderProgressSummary() {
+    var box = $('#progress-summary');
+    if (!box) return;
+
+    if (!progressActive()) {
+      box.classList.add('hidden');
+      return;
+    }
+    box.classList.remove('hidden');
+
+    var ev = currentEvent();
+    var rd = selectedRound();
+    $('#ps-context').textContent =
+      (ev ? Utils.formatThaiDate(ev.eventDate) : '') +
+      (rd ? ' · ' + (rd.roundName || '') : '');
+
+    var doneBox = $('#ps-done');
+    var pendBox = $('#ps-pending');
+
+    if (state.progressLoading && !state.progress) {
+      doneBox.textContent = 'กำลังตรวจสอบสถานะ...';
+      pendBox.classList.add('hidden');
+      box.classList.add('is-loading');
+      return;
+    }
+    box.classList.remove('is-loading');
+    pendBox.classList.remove('hidden');
+
+    if (!state.progress) {
+      doneBox.textContent = 'ยังไม่ทราบสถานะการกรอก';
+      pendBox.classList.add('hidden');
+      return;
+    }
+
+    doneBox.innerHTML = '';
+    doneBox.appendChild(Utils.el('span', 'ps-dot'));
+    doneBox.appendChild(document.createTextNode(
+      'กรอกแล้ว ' + Utils.formatNumber(state.progress.completed) +
+      ' / ' + Utils.formatNumber(state.progress.total) + ' ลาน'));
+
+    pendBox.innerHTML = '';
+    pendBox.appendChild(Utils.el('span', 'ps-dot'));
+    pendBox.appendChild(document.createTextNode(
+      'ยังไม่กรอก ' + Utils.formatNumber(state.progress.pending) + ' ลาน'));
+  }
+
+  /**
+   * ลานที่บันทึกไปแล้ว — อธิบายให้ผู้ใช้เข้าใจ และเปิดทางให้แก้ไขถ้าตัวเลขผิด
+   * (การแก้ไขต้องให้เจ้าหน้าที่ยืนยันเองเท่านั้น คำขอที่เกิดจากการกดซ้ำ
+   *  หรือเปิดหลายแท็บจะไม่มีการยืนยันนี้ จึงยังถูกเซิร์ฟเวอร์ปฏิเสธตามปกติ)
+   */
+  function offerEditCompletedLot(lot) {
+    var p = lotProgress(lot.parkingId);
+    var lines = [
+      'ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว',
+      '',
+      lot.parkingNo + ' — ' + lot.parkingName
+    ];
+    if (p) {
+      lines.push('จำนวนรถที่บันทึกไว้: ' + Utils.formatNumber(p.vehicleCount) + ' คัน');
+      if (p.lastUpdate) lines.push('บันทึกเมื่อ ' + Utils.formatThaiTime(p.lastUpdate));
+    }
+    lines.push('');
+    lines.push('กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล');
+    lines.push('');
+    lines.push('หากตัวเลขที่บันทึกไว้ไม่ถูกต้อง กด "ตกลง" เพื่อแก้ไขข้อมูลของลานนี้');
+
+    if (!window.confirm(lines.join('\n'))) return;
+
+    state.editMode = true;
+    state.editLotId = lot.parkingId;
+    selectLot(lot);
+    if (p && p.vehicleCount !== null && p.vehicleCount !== undefined) {
+      $('#f-count').value = String(p.vehicleCount);
+      checkCapacityWarning();
+    }
+    Utils.toast('กำลังแก้ไขข้อมูลของ ' + lot.parkingName, 'warn');
+  }
+
   /* ================= รายการลานจอด: dropdown + ค้นหา ================= */
   var activeIndex = -1;
   var filtered = [];
@@ -851,9 +1088,10 @@ var App = (function () {
   }
 
   function renderLotList(query) {
+    lastLotQuery = query || '';
     var box = $('#parking-listbox');
     box.innerHTML = '';
-    filtered = state.lots.filter(function (l) { return matchLot(l, query); });
+    filtered = state.lots.filter(function (l) { return matchLot(l, lastLotQuery); });
     activeIndex = -1;
 
     if (state.lots.length === 0) {
@@ -866,6 +1104,8 @@ var App = (function () {
     }
 
     var selectedId = $('#f-parking-id').value;
+    var trackStatus = progressActive();
+
     filtered.forEach(function (lot, idx) {
       var li = document.createElement('li');
       li.setAttribute('role', 'option');
@@ -876,16 +1116,61 @@ var App = (function () {
 
       li.appendChild(Utils.el('span', 'no', lot.parkingNo));
       li.appendChild(Utils.el('span', 'name', lot.parkingName));   // ชื่อเต็ม ไม่ตัดทอน
-      li.appendChild(Utils.el('span', 'zone',
+
+      var zoneEl = Utils.el('span', 'zone',
         (lot.zone && lot.zone !== 'ไม่กำกับโซน' ? 'Zone ' + lot.zone : 'ไม่กำกับโซน') +
-        ' · ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน'));
+        ' · ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน');
+
+      // ---------- เวอร์ชัน 1.3.1: ป้ายสถานะการกรอกข้อมูล ----------
+      // สถานะสื่อด้วย "ข้อความ + เครื่องหมาย" ไม่ใช่สีเพียงอย่างเดียว
+      var done = trackStatus && isLotCompleted(lot.parkingId);
+
+      if (trackStatus && !done) {
+        // "ยังไม่กรอก" วางไว้บรรทัดเดียวกับโซน เพื่อไม่ให้รายการ 50 ลานยาวเกินไป
+        li.classList.add('lot-pending');
+        var sp = Utils.el('span', 'lot-status status-pending');
+        sp.appendChild(Utils.el('span', 'st-dot'));
+        sp.appendChild(Utils.el('span', 'st-text', 'ยังไม่กรอก'));
+        li.appendChild(sp);
+      }
+
+      li.appendChild(zoneEl);
+
+      if (done) {
+        // "กรอกข้อมูลเรียบร้อยแล้ว" ใช้พื้นที่เต็มบรรทัด เพื่อให้เห็นทันทีว่าไม่ต้องกรอกซ้ำ
+        li.classList.add('lot-done');
+        li.setAttribute('aria-disabled', 'true');
+        var pg = lotProgress(lot.parkingId);
+        var sd = Utils.el('span', 'lot-status status-done');
+        sd.appendChild(Utils.el('span', 'st-icon', '✓'));
+        sd.appendChild(Utils.el('span', 'st-text', 'กรอกข้อมูลเรียบร้อยแล้ว'));
+        if (pg && pg.vehicleCount !== null && pg.vehicleCount !== undefined) {
+          sd.appendChild(Utils.el('span', 'st-count',
+            Utils.formatNumber(pg.vehicleCount) + ' / ' +
+            Utils.formatNumber(pg.capacity) + ' คัน'));
+        }
+        li.appendChild(sd);
+      }
 
       li.addEventListener('mousedown', function (e) {
         e.preventDefault();
-        selectLot(lot);
+        chooseLot(lot);
       });
       box.appendChild(li);
     });
+  }
+
+  /**
+   * เลือกลานจากรายการ — ใช้ร่วมกันทั้งการคลิกและการกด Enter
+   * ลานที่บันทึกข้อมูลไปแล้วจะไม่ถูกเลือกเพื่อสร้างรายการใหม่
+   */
+  function chooseLot(lot) {
+    if (progressActive() && isLotCompleted(lot.parkingId)) {
+      closeList();
+      offerEditCompletedLot(lot);
+      return;
+    }
+    selectLot(lot);
   }
 
   function openList() {
@@ -911,6 +1196,8 @@ var App = (function () {
   }
 
   function selectLot(lot) {
+    // เปลี่ยนไปลานอื่น = ออกจากโหมดแก้ไขทันที
+    if (state.editLotId && state.editLotId !== lot.parkingId) clearEditMode();
     state.selectedLot = lot;
     $('#f-parking-id').value = lot.parkingId;
     $('#f-parking-search').value = lot.parkingNo + ' · ' + lot.parkingName;
@@ -923,6 +1210,7 @@ var App = (function () {
   }
 
   function clearSelectedLot() {
+    clearEditMode();
     state.selectedLot = null;
     $('#f-parking-id').value = '';
     $('#f-parking-search').value = '';
@@ -1058,6 +1346,16 @@ var App = (function () {
       showFormError('กรุณาเลือกลานจอดรถ', '#f-parking-search'); return null;
     }
 
+    // ---------- ลำดับที่ 5: ลานนี้บันทึกไปแล้วหรือยัง ----------
+    // ชั้นนี้เป็นการช่วยผู้ใช้เท่านั้น เซิร์ฟเวอร์ตรวจซ้ำด้วยข้อมูลจริงในชีตเสมอ
+    var pid = $('#f-parking-id').value;
+    if (progressActive() && isLotCompleted(pid) &&
+        !(state.editMode && state.editLotId === pid)) {
+      showFormError('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว ' +
+        'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล', '#f-parking-search');
+      return null;
+    }
+
     var countRaw = $('#f-count').value.trim();
     if (countRaw === '') {
       showFormError('กรุณากรอกจำนวนรถยนต์ที่ตรวจนับได้', '#f-count'); return null;
@@ -1074,12 +1372,15 @@ var App = (function () {
       showFormError('กรุณากรอกชื่อ-นามสกุลผู้บันทึก', '#f-name'); return null;
     }
 
+    // เบอร์โทรศัพท์: ไม่บังคับกรอก แต่ถ้ากรอกต้องเป็นตัวเลข 10 หลักพอดี
+    // ใช้กติกาเดียวกับฝั่งเซิร์ฟเวอร์ (Utils.normalizePhone -> ^\d{10}$)
+    // ไม่แจ้งเตือนระหว่างพิมพ์ จะแจ้งก็ต่อเมื่อกดบันทึกเท่านั้น
     var phoneRaw = $('#f-phone').value.trim();
     var phone = '';
     if (phoneRaw) {
       phone = Utils.normalizePhone(phoneRaw);
       if (phone === null) {
-        showFormError('รูปแบบเบอร์โทรศัพท์ไม่ถูกต้อง (ต้องเป็นเบอร์ไทย 10 หลัก)', '#f-phone');
+        showFormError(PHONE_MESSAGE, '#f-phone');
         return null;
       }
     }
@@ -1095,7 +1396,9 @@ var App = (function () {
       note: $('#f-note').value.trim(),
       clientTimestamp: Utils.clientTimestamp(),
       source: 'WEB',
-      requestId: state.requestId
+      requestId: state.requestId,
+      // true ได้ก็ต่อเมื่อเจ้าหน้าที่กดยืนยันขอแก้ไขข้อมูลลานนี้ด้วยตนเองเท่านั้น
+      confirmEdit: !!(state.editMode && state.editLotId === $('#f-parking-id').value)
     };
   }
 
@@ -1111,8 +1414,9 @@ var App = (function () {
   function buildConfirmMessage(payload, overCapacity) {
     var lot = state.selectedLot;
     var ev = currentEvent();
+    var isEditing = !!(state.editMode && state.editLotId === payload.parkingId);
     var lines = [
-      'ยืนยันการบันทึกข้อมูล',
+      isEditing ? 'ยืนยันการแก้ไขข้อมูลที่บันทึกไว้แล้ว' : 'ยืนยันการบันทึกข้อมูล',
       '',
       'ลานจอด:  ' + lot.parkingNo + ' — ' + lot.parkingName,
       'โซน:      ' + (lot.zone || 'ไม่กำกับโซน'),
@@ -1126,6 +1430,13 @@ var App = (function () {
       lines.push('⚠ จำนวนรถมากกว่าความจุที่กำหนดไว้ (' +
         Utils.formatNumber(lot.effectiveCapacity) + ' คัน)');
       lines.push('กรุณาตรวจสอบให้แน่ใจก่อนกดตกลง');
+    }
+    if (isEditing) {
+      var prev = lotProgress(payload.parkingId);
+      lines.push('');
+      lines.push('ข้อมูลเดิมที่บันทึกไว้: ' +
+        (prev ? Utils.formatNumber(prev.vehicleCount) + ' คัน' : '-'));
+      lines.push('ระบบจะเก็บทั้งข้อมูลเดิมและข้อมูลใหม่ไว้ และถือค่าใหม่เป็นค่าล่าสุด');
     }
     lines.push('');
     lines.push('กด "ตกลง" เพื่อบันทึก หรือ "ยกเลิก" เพื่อกลับไปแก้ไข');
@@ -1167,12 +1478,20 @@ var App = (function () {
     Api.call('submitRecord', payload)
       .then(function (res) {
         saveRecorderIfWanted(payload);
+        // อัปเดตสถานะลานทันที ไม่ต้องให้ผู้ใช้รีเฟรชหน้าเว็บ
+        markLotCompletedLocally(res.record || {});
+        clearEditMode();
         showSuccess(res, payload);
         if (res.duplicated) {
           Utils.toast('รายการนี้เคยบันทึกไว้แล้ว ระบบไม่บันทึกซ้ำ', 'warn');
         } else {
           var rn = (res.record && res.record.roundName) || '';
-          Utils.toast(rn ? ('บันทึกข้อมูล' + rn + ' สำเร็จ') : 'บันทึกข้อมูลสำเร็จ', 'success');
+          if (res.isEdit) {
+            Utils.toast(rn ? ('แก้ไขข้อมูล' + rn + ' เรียบร้อยแล้ว') : 'แก้ไขข้อมูลเรียบร้อยแล้ว',
+              'success');
+          } else {
+            Utils.toast(rn ? ('บันทึกข้อมูล' + rn + ' สำเร็จ') : 'บันทึกข้อมูลสำเร็จ', 'success');
+          }
         }
         state.requestId = Utils.uuid();   // requestId ใหม่สำหรับรายการถัดไป
       })
@@ -1193,6 +1512,12 @@ var App = (function () {
         if (err.errorCode === 'WINDOW_CLOSED' || err.errorCode === 'YEAR_INACTIVE' ||
             err.errorCode === 'ROUND_CLOSED' || err.errorCode === 'ROUND_NOT_ACTIVE') {
           refreshRecordingStatus();
+        }
+        // เซิร์ฟเวอร์บอกว่าลานนี้ถูกบันทึกไปแล้ว (เช่น เจ้าหน้าที่อีกคนบันทึกตัดหน้า)
+        // ให้ดึงสถานะจริงมาแสดงทันที เพื่อให้หน้าจอตรงกับข้อมูลในระบบ
+        if (err.errorCode === 'ALREADY_RECORDED') {
+          clearEditMode();
+          loadRoundProgress();
         }
       })
       .then(function () {
@@ -1230,8 +1555,13 @@ var App = (function () {
     var roundNo = Number(rec.roundNo || 0);
 
     // หัวข้อและข้อความเตือนให้บันทึกรอบถัดไป (ตามข้อกำหนดเวอร์ชัน 1.3.0)
-    $('#success-title').textContent = roundName
-      ? ('บันทึกข้อมูล' + roundName + ' สำเร็จ') : 'บันทึกข้อมูลสำเร็จ';
+    if (res.isEdit) {
+      $('#success-title').textContent = roundName
+        ? ('แก้ไขข้อมูล' + roundName + ' เรียบร้อยแล้ว') : 'แก้ไขข้อมูลเรียบร้อยแล้ว';
+    } else {
+      $('#success-title').textContent = roundName
+        ? ('บันทึกข้อมูล' + roundName + ' สำเร็จ') : 'บันทึกข้อมูลสำเร็จ';
+    }
 
     var followup = $('#success-followup');
     var nextRound = null;
@@ -1296,7 +1626,8 @@ var App = (function () {
   function refreshRecordingStatus() {
     if (!Api.isConfigured() || navigator.onLine === false) return Promise.resolve();
     return Api.call('getRecordingStatus',
-      { yearBE: state.currentYear, eventId: $('#f-event').value })
+      { yearBE: state.currentYear, eventId: $('#f-event').value,
+        roundId: state.selectedRoundId || '' })
       .then(function (res) {
         state.years = res.years || state.years;
         // เทียบนาฬิกากับเซิร์ฟเวอร์ทุกครั้งที่รีเฟรช (ทุก ~60 วินาที)
@@ -1330,6 +1661,13 @@ var App = (function () {
         if (res.roundStatus && res.roundStatus.eventId &&
             res.roundStatus.eventId === $('#f-event').value) {
           applyRoundStatus(res.roundStatus);
+        }
+
+        // สถานะลานล่าสุดจากระบบหลังบ้าน — ทำให้เห็นสิ่งที่เจ้าหน้าที่คนอื่นบันทึกไว้ด้วย
+        if (res.roundProgress && res.roundProgress.eventId === $('#f-event').value &&
+            String(res.roundProgress.roundId || '') === String(state.selectedRoundId || '')) {
+          lastProgressKey = res.roundProgress.eventId + '|' + (res.roundProgress.roundId || '');
+          applyRoundProgress(res.roundProgress);
         }
         updateSubmitAvailability();
       })
@@ -1400,7 +1738,7 @@ var App = (function () {
         if (isListOpen()) {
           e.preventDefault();
           var idx = activeIndex >= 0 ? activeIndex : 0;
-          if (filtered[idx]) selectLot(filtered[idx]);
+          if (filtered[idx]) chooseLot(filtered[idx]);
         }
       } else if (e.key === 'Escape') { closeList(); }
     });
@@ -1419,6 +1757,14 @@ var App = (function () {
       var v = this.value.replace(/[^\d]/g, '');   // อนุญาตเฉพาะตัวเลข
       if (v !== this.value) this.value = v;
       checkCapacityWarning();
+    });
+
+    // เวอร์ชัน 1.3.1 — เบอร์โทรศัพท์: รับเฉพาะตัวเลข ยาวไม่เกิน 10 หลัก
+    // ครอบคลุมทั้งการพิมพ์และการวาง (paste) เพราะเหตุการณ์ input เกิดทั้งสองกรณี
+    // ไม่แสดงข้อความเตือนระหว่างพิมพ์ เพียงกรองอักขระที่ใช้ไม่ได้ออกเงียบ ๆ
+    $('#f-phone').addEventListener('input', function () {
+      var v = Utils.digitsOnly10(this.value);
+      if (v !== this.value) this.value = v;
     });
 
     $('#record-form').addEventListener('submit', handleSubmit);
