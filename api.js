@@ -47,6 +47,8 @@ var Api = (function () {
    */
   var AUTH_ACTIONS = {
     submitRecord: true, getMyIdentity: true,
+    // เวอร์ชัน 1.3.2 — ต้องแนบ ID Token (ส่งทาง POST body เท่านั้น)
+    getMyRoundOwnership: true, logSignIn: true,
     getHistory: true, getAuditLog: true, getAdminParkingLots: true,
     addParking: true, updateParking: true, deactivateParking: true,
     activateParking: true, setParkingDayConfig: true, addEventDay: true,

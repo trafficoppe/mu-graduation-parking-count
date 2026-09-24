@@ -27,6 +27,13 @@
  *  - กุญแจของสถานะคือ วันงาน (EventID) + รอบ (RoundID) + ลานจอด (ParkingID)
  *    คนละวันหรือคนละรอบ จึงเป็นคนละสถานะเสมอ
  *  - เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นทุกครั้งที่กดบันทึก (ERR ALREADY_RECORDED)
+ *
+ * เวอร์ชัน 1.3.2 — แก้ไขได้เฉพาะเจ้าของรายการ:
+ *  - ปุ่มแก้ไขบนหน้าเว็บเป็นเพียง "การแสดงผล" ไม่ใช่การให้สิทธิ์
+ *  - สิทธิ์จริงตัดสินที่เซิร์ฟเวอร์ทุกครั้ง โดยเทียบรหัสบัญชี Google (sub)
+ *    ที่เซิร์ฟเวอร์ตรวจสอบเอง กับ GoogleSub ที่บันทึกไว้ในแถวเดิม
+ *  - หน้าเว็บรู้เพียงว่า "ลานใดเป็นของฉัน" (getMyRoundOwnership)
+ *    ไม่เคยรู้ว่าลานอื่นเป็นของใคร จึงไม่มีการเปิดเผยตัวตนผู้อื่น
  */
 var App = (function () {
   'use strict';
@@ -54,6 +61,9 @@ var App = (function () {
     progressLoading: false,
     editMode: false,         // true เมื่อเจ้าหน้าที่ยืนยันขอแก้ไขข้อมูลลานที่บันทึกไว้แล้ว
     editLotId: '',
+    // ---- เวอร์ชัน 1.3.2 ----
+    ownedLots: {},           // { ParkingID: true } เฉพาะลานที่บัญชีนี้เป็นผู้บันทึก
+    ownershipKey: '',        // 'EventID|RoundID' ที่โหลดข้อมูลความเป็นเจ้าของไว้แล้ว
     requestId: null,
     submitting: false,
     submitAttempt: false,   // true เฉพาะช่วงที่ผู้ใช้เพิ่งกดปุ่มบันทึก (ใช้ตัดสินใจเด้ง popup)
@@ -68,6 +78,10 @@ var App = (function () {
   var lastRoundSignature = '';
   var lastProgressKey = '';  // 'EventID|RoundID' ที่โหลดสถานะลานไว้แล้ว
   var lastLotQuery = '';     // คำค้นหาล่าสุดของรายการลาน (ใช้ตอนวาดใหม่)
+
+  /** คีย์บอกว่า "เซสชันนี้บันทึกการลงชื่อเข้าใช้ไปแล้ว" — ใช้กันบันทึกซ้ำเท่านั้น
+   *  ไม่ใช่ข้อมูลสิทธิ์ และเซิร์ฟเวอร์มีตัวกันซ้ำของตัวเองอีกชั้นอยู่แล้ว */
+  var SIGNIN_LOG_KEY = 'gpvcs.signinLogged.v1';
 
   /** ข้อความแจ้งเรื่องเบอร์โทรศัพท์ — ใช้ที่เดียวทั้งไฟล์ ให้ตรงกับฝั่งเซิร์ฟเวอร์ */
   var PHONE_MESSAGE =
@@ -811,6 +825,20 @@ var App = (function () {
           : 'กำลังเตรียมระบบลงชื่อเข้าใช้...';
       }
     }
+    // เวอร์ชัน 1.3.2 — เมื่อเพิ่งลงชื่อเข้าใช้สำเร็จ
+    if (st.signedIn && st.profile) {
+      logSignInOnce();
+      loadMyOwnership(true);
+    } else {
+      // ออกจากระบบ -> ล้างข้อมูลความเป็นเจ้าของและโหมดแก้ไขทันที
+      if (Object.keys(state.ownedLots).length) {
+        clearOwnership();
+        clearEditMode();
+        renderLotList(lastLotQuery);
+      }
+      try { window.sessionStorage.removeItem(SIGNIN_LOG_KEY); } catch (e) {}
+    }
+
     updateSubmitAvailability();
     if (typeof Admin !== 'undefined' && Admin.onAuthChange) Admin.onAuthChange(st);
   }
@@ -890,6 +918,79 @@ var App = (function () {
     renderLotList(lastLotQuery);
   }
 
+  /* ==================================================================
+     เวอร์ชัน 1.3.2 — "ลานไหนเป็นของฉัน" และการบันทึกการลงชื่อเข้าใช้
+     ==================================================================
+     ย้ำ: ข้อมูลนี้ใช้ตัดสินใจ "แสดงผล" เท่านั้น
+     สิทธิ์จริงตัดสินที่เซิร์ฟเวอร์ทุกครั้งที่กดบันทึก ปลอมจากหน้าเว็บไม่ได้
+  */
+
+  /** ลานนี้บัญชีที่ลงชื่อเข้าใช้อยู่เป็นผู้บันทึกหรือไม่ */
+  function isLotOwnedByMe(parkingId) {
+    return !!(parkingId && state.ownedLots[parkingId]);
+  }
+
+  /** ล้างข้อมูลความเป็นเจ้าของ (ใช้ตอนออกจากระบบ หรือเปลี่ยนวัน/รอบ) */
+  function clearOwnership() {
+    state.ownedLots = {};
+    state.ownershipKey = '';
+  }
+
+  /** ขอรายการลานที่บัญชีนี้เป็นผู้บันทึก สำหรับวันงาน+รอบปัจจุบัน */
+  function loadMyOwnership(force) {
+    var eventId = $('#f-event').value;
+    var roundId = state.selectedRoundId || '';
+    var key = eventId + '|' + roundId;
+
+    if (!Auth.isSignedIn() || !Auth.getToken() || !progressActive() ||
+        !Api.isConfigured() || navigator.onLine === false) {
+      clearOwnership();
+      renderLotList(lastLotQuery);
+      return Promise.resolve();
+    }
+    if (!force && key === state.ownershipKey) return Promise.resolve();
+    state.ownershipKey = key;
+
+    return Api.call('getMyRoundOwnership',
+      { yearBE: state.currentYear, eventId: eventId, roundId: roundId })
+      .then(function (res) {
+        // ทิ้งผลเก่าถ้าผู้ใช้เปลี่ยนวันงาน/รอบระหว่างรอคำตอบ
+        if (res.eventId !== $('#f-event').value ||
+            String(res.roundId || '') !== String(state.selectedRoundId || '')) return;
+        var map = {};
+        (res.ownedParkingIds || []).forEach(function (pid) { map[pid] = true; });
+        state.ownedLots = map;
+        renderLotList(lastLotQuery);
+      })
+      .catch(function (err) {
+        // ถ้าขอไม่สำเร็จ ให้ถือว่า "ไม่รู้ว่าเป็นของใคร" คือไม่แสดงปุ่มแก้ไข
+        // ปลอดภัยกว่าการเดาว่าเป็นของผู้ใช้คนนี้
+        console.warn('[ownership]', err && err.message);
+        state.ownedLots = {};
+        state.ownershipKey = '';
+        renderLotList(lastLotQuery);
+      });
+  }
+
+  /**
+   * บันทึก "การลงชื่อเข้าใช้สำเร็จ" ลงระบบหลังบ้าน หนึ่งครั้งต่อเซสชันเบราว์เซอร์
+   * ตัวกันซ้ำที่แท้จริงอยู่ที่เซิร์ฟเวอร์ ส่วนคีย์ใน sessionStorage เป็นเพียง
+   * การลดคำขอที่ไม่จำเป็น ไม่ใช่กลไกความปลอดภัย
+   */
+  function logSignInOnce() {
+    if (!Auth.isSignedIn() || !Auth.getToken() || !Api.isConfigured()) return;
+    var already = false;
+    try { already = window.sessionStorage.getItem(SIGNIN_LOG_KEY) === '1'; } catch (e) {}
+    if (already) return;
+    try { window.sessionStorage.setItem(SIGNIN_LOG_KEY, '1'); } catch (e) {}
+
+    Api.call('logSignIn', {}).catch(function (err) {
+      // บันทึกไม่สำเร็จต้องไม่กระทบการใช้งาน และต้องให้ลองใหม่ได้ครั้งหน้า
+      console.warn('[signin-log]', err && err.message);
+      try { window.sessionStorage.removeItem(SIGNIN_LOG_KEY); } catch (e) {}
+    });
+  }
+
   /** ข้อมูลสถานะของลานหนึ่ง (null = ไม่มีข้อมูล) */
   function lotProgress(parkingId) {
     if (!state.progress || !parkingId) return null;
@@ -949,7 +1050,9 @@ var App = (function () {
     if (key === lastProgressKey) return;
     lastProgressKey = key;
     clearEditMode();
+    clearOwnership();
     loadRoundProgress();
+    loadMyOwnership(true);
   }
 
   /** อัปเดตสถานะลานทันทีหลังบันทึกสำเร็จ โดยไม่ต้องรอคำขอใหม่ */
@@ -1045,7 +1148,7 @@ var App = (function () {
       if (p.lastUpdate) lines.push('บันทึกเมื่อ ' + Utils.formatThaiTime(p.lastUpdate));
     }
     lines.push('');
-    lines.push('กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล');
+    lines.push('คุณเป็นผู้บันทึกข้อมูลรายการนี้ จึงสามารถแก้ไขได้');
     lines.push('');
     lines.push('หากตัวเลขที่บันทึกไว้ไม่ถูกต้อง กด "ตกลง" เพื่อแก้ไขข้อมูลของลานนี้');
 
@@ -1114,42 +1217,61 @@ var App = (function () {
       li.setAttribute('aria-selected', lot.parkingId === selectedId ? 'true' : 'false');
       if (lot.parkingId === selectedId) li.classList.add('selected-item');
 
-      li.appendChild(Utils.el('span', 'no', lot.parkingNo));
-      li.appendChild(Utils.el('span', 'name', lot.parkingName));   // ชื่อเต็ม ไม่ตัดทอน
-
-      var zoneEl = Utils.el('span', 'zone',
-        (lot.zone && lot.zone !== 'ไม่กำกับโซน' ? 'Zone ' + lot.zone : 'ไม่กำกับโซน') +
-        ' · ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน');
-
-      // ---------- เวอร์ชัน 1.3.1: ป้ายสถานะการกรอกข้อมูล ----------
-      // สถานะสื่อด้วย "ข้อความ + เครื่องหมาย" ไม่ใช่สีเพียงอย่างเดียว
+      // ---------------------------------------------------------------
+      // โครงบรรทัด (เวอร์ชัน 1.3.2)
+      //   บรรทัดที่ 1 : [ลำดับลาน] [ชื่อลาน] [ป้ายสถานะ]
+      //   บรรทัดที่ 2 : [จำนวนรถ]  ............ [โซน · ความจุ] [แก้ไขได้]
+      //
+      // ป้ายสถานะอยู่ "บรรทัดเดียวกับชื่อลาน" ไม่ใช่ใต้ลำดับลาน
+      // และลำดับลานยังใช้รูปแบบเดิมทุกสถานะ จึงไม่เกิดลำดับซ้อนที่ชวนสับสน
+      // ---------------------------------------------------------------
       var done = trackStatus && isLotCompleted(lot.parkingId);
+      var mine = done && isLotOwnedByMe(lot.parkingId);
+      var pg = done ? lotProgress(lot.parkingId) : null;
 
-      if (trackStatus && !done) {
-        // "ยังไม่กรอก" วางไว้บรรทัดเดียวกับโซน เพื่อไม่ให้รายการ 50 ลานยาวเกินไป
-        li.classList.add('lot-pending');
-        var sp = Utils.el('span', 'lot-status status-pending');
-        sp.appendChild(Utils.el('span', 'st-dot'));
-        sp.appendChild(Utils.el('span', 'st-text', 'ยังไม่กรอก'));
-        li.appendChild(sp);
+      // ----- บรรทัดที่ 1: ชื่อลาน + ป้ายสถานะ อยู่บรรทัดเดียวกัน -----
+      // ป้ายสถานะลอยชิดขวาของบรรทัดแรก และชื่อลานไหลล้อมรอบ
+      // จึงได้ทั้ง "อยู่บรรทัดเดียวกับชื่อ" และชื่อลานยังอ่านง่ายเต็มความกว้าง
+      var head = Utils.el('span', 'lot-head');
+      if (trackStatus) {
+        if (done) {
+          li.classList.add('lot-done');
+          if (mine) li.classList.add('lot-mine');
+          li.setAttribute('aria-disabled', 'true');
+          var sd = Utils.el('span', 'lot-status status-done');
+          sd.appendChild(Utils.el('span', 'st-check', '✓'));
+          sd.appendChild(Utils.el('span', 'st-text', 'กรอกข้อมูลเรียบร้อยแล้ว'));
+          head.appendChild(sd);
+        } else {
+          li.classList.add('lot-pending');
+          var sp = Utils.el('span', 'lot-status status-pending');
+          sp.appendChild(Utils.el('span', 'st-dot'));
+          sp.appendChild(Utils.el('span', 'st-text', 'ยังไม่กรอก'));
+          head.appendChild(sp);
+        }
+      }
+      head.appendChild(Utils.el('span', 'no', lot.parkingNo));
+      head.appendChild(Utils.el('span', 'name', lot.parkingName));   // ชื่อเต็ม ไม่ตัดทอน
+      li.appendChild(head);
+
+      // ----- บรรทัดที่ 2: จำนวนรถ · โซน · ความจุ -----
+      if (done && pg && pg.vehicleCount !== null && pg.vehicleCount !== undefined) {
+        li.appendChild(Utils.el('span', 'st-count',
+          Utils.formatNumber(pg.vehicleCount) + ' / ' +
+          Utils.formatNumber(pg.capacity) + ' คัน'));
       }
 
-      li.appendChild(zoneEl);
+      li.appendChild(Utils.el('span', 'zone',
+        (lot.zone && lot.zone !== 'ไม่กำกับโซน' ? 'Zone ' + lot.zone : 'ไม่กำกับโซน') +
+        ' · ' + Utils.formatNumber(lot.effectiveCapacity) + ' คัน'));
 
-      if (done) {
-        // "กรอกข้อมูลเรียบร้อยแล้ว" ใช้พื้นที่เต็มบรรทัด เพื่อให้เห็นทันทีว่าไม่ต้องกรอกซ้ำ
-        li.classList.add('lot-done');
-        li.setAttribute('aria-disabled', 'true');
-        var pg = lotProgress(lot.parkingId);
-        var sd = Utils.el('span', 'lot-status status-done');
-        sd.appendChild(Utils.el('span', 'st-icon', '✓'));
-        sd.appendChild(Utils.el('span', 'st-text', 'กรอกข้อมูลเรียบร้อยแล้ว'));
-        if (pg && pg.vehicleCount !== null && pg.vehicleCount !== undefined) {
-          sd.appendChild(Utils.el('span', 'st-count',
-            Utils.formatNumber(pg.vehicleCount) + ' / ' +
-            Utils.formatNumber(pg.capacity) + ' คัน'));
-        }
-        li.appendChild(sd);
+      // ----- ปุ่มแก้ไข: แสดงเฉพาะเมื่อบัญชีนี้เป็นผู้บันทึกรายการนั้น -----
+      // ถ้าไม่ใช่เจ้าของ จะไม่แสดงปุ่มที่ทำให้เข้าใจผิดว่าแก้ได้
+      if (mine) {
+        var ed = Utils.el('span', 'lot-edit');
+        ed.appendChild(Utils.el('span', 'ed-icon', '✎'));
+        ed.appendChild(Utils.el('span', '', 'แก้ไขได้'));
+        li.appendChild(ed);
       }
 
       li.addEventListener('mousedown', function (e) {
@@ -1167,6 +1289,26 @@ var App = (function () {
   function chooseLot(lot) {
     if (progressActive() && isLotCompleted(lot.parkingId)) {
       closeList();
+
+      // ยังไม่ได้ลงชื่อเข้าใช้ — ไม่รู้ว่าเป็นของใคร จึงไม่เปิดทางให้แก้ไข
+      if (!Auth.isSignedIn() || !Auth.getToken()) {
+        window.alert('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว\n\n' +
+          'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล\n\n' +
+          'หากคุณเป็นผู้บันทึกรายการนี้และต้องการแก้ไข ' +
+          'กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ก่อน');
+        return;
+      }
+
+      // ลงชื่อเข้าใช้แล้วแต่ไม่ใช่ผู้บันทึกรายการนี้
+      // ไม่เปิดเผยว่าใครเป็นเจ้าของ
+      if (!isLotOwnedByMe(lot.parkingId)) {
+        window.alert('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว\n\n' +
+          'ข้อมูลลานจอดรถนี้ถูกบันทึกโดยบัญชี Google อื่น ' +
+          'คุณไม่มีสิทธิ์แก้ไขข้อมูลรายการนี้\n\n' +
+          'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล');
+        return;
+      }
+
       offerEditCompletedLot(lot);
       return;
     }
@@ -1349,11 +1491,19 @@ var App = (function () {
     // ---------- ลำดับที่ 5: ลานนี้บันทึกไปแล้วหรือยัง ----------
     // ชั้นนี้เป็นการช่วยผู้ใช้เท่านั้น เซิร์ฟเวอร์ตรวจซ้ำด้วยข้อมูลจริงในชีตเสมอ
     var pid = $('#f-parking-id').value;
-    if (progressActive() && isLotCompleted(pid) &&
-        !(state.editMode && state.editLotId === pid)) {
-      showFormError('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว ' +
-        'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล', '#f-parking-search');
-      return null;
+    if (progressActive() && isLotCompleted(pid)) {
+      if (!isLotOwnedByMe(pid)) {
+        // ไม่ใช่เจ้าของ — เซิร์ฟเวอร์ปฏิเสธอยู่แล้ว แต่บอกผู้ใช้ตั้งแต่ตรงนี้
+        showFormError('ข้อมูลลานจอดรถนี้ถูกบันทึกโดยบัญชี Google อื่น ' +
+          'คุณไม่มีสิทธิ์แก้ไขข้อมูลรายการนี้ ' +
+          'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล', '#f-parking-search');
+        return null;
+      }
+      if (!(state.editMode && state.editLotId === pid)) {
+        showFormError('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว ' +
+          'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล', '#f-parking-search');
+        return null;
+      }
     }
 
     var countRaw = $('#f-count').value.trim();
@@ -1480,6 +1630,11 @@ var App = (function () {
         saveRecorderIfWanted(payload);
         // อัปเดตสถานะลานทันที ไม่ต้องให้ผู้ใช้รีเฟรชหน้าเว็บ
         markLotCompletedLocally(res.record || {});
+        // บัญชีที่บันทึกคือบัญชีนี้ จึงเป็นเจ้าของรายการนั้นทันที
+        if (res.record && res.record.parkingId) {
+          state.ownedLots[res.record.parkingId] = true;
+          renderLotList(lastLotQuery);
+        }
         clearEditMode();
         showSuccess(res, payload);
         if (res.duplicated) {
@@ -1518,6 +1673,13 @@ var App = (function () {
         if (err.errorCode === 'ALREADY_RECORDED') {
           clearEditMode();
           loadRoundProgress();
+        }
+        // เซิร์ฟเวอร์ปฏิเสธเพราะไม่ใช่เจ้าของรายการ (หรือตรวจสิทธิ์ไม่ได้)
+        // ให้ออกจากโหมดแก้ไข และซิงก์ทั้งสถานะและสิทธิ์จากของจริงใหม่
+        if (err.errorCode === 'EDIT_NOT_OWNER' || err.errorCode === 'EDIT_OWNER_UNKNOWN') {
+          clearEditMode();
+          loadRoundProgress();
+          loadMyOwnership(true);
         }
       })
       .then(function () {
@@ -1840,6 +2002,9 @@ var App = (function () {
     // เวอร์ชัน 1.3.0 — เปิดให้ทดสอบ/ตรวจสอบสถานะรอบจากภายนอกได้
     activeRound: activeRound,
     serverNow: serverNow,
-    reloadRounds: reloadRounds
+    reloadRounds: reloadRounds,
+    // เวอร์ชัน 1.3.2 — สำหรับตรวจสอบสถานะ (ไม่ใช่การให้สิทธิ์)
+    isLotOwnedByMe: isLotOwnedByMe,
+    loadMyOwnership: loadMyOwnership
   };
 })();
