@@ -34,6 +34,19 @@
  *    ที่เซิร์ฟเวอร์ตรวจสอบเอง กับ GoogleSub ที่บันทึกไว้ในแถวเดิม
  *  - หน้าเว็บรู้เพียงว่า "ลานใดเป็นของฉัน" (getMyRoundOwnership)
  *    ไม่เคยรู้ว่าลานอื่นเป็นของใคร จึงไม่มีการเปิดเผยตัวตนผู้อื่น
+ *
+ * เวอร์ชัน 1.3.3 — การลงชื่อเข้าใช้ด้วย Google "ไม่บังคับ":
+ *  - รปภ. ที่ลงชื่อเข้าใช้ไม่ได้ ยังบันทึกข้อมูลได้ทันที (ไม่ต้องกดบันทึกซ้ำ)
+ *  - กดบันทึกครั้งแรกโดยไม่ได้ลงชื่อเข้าใช้ -> popup ให้เลือก
+ *      [ลงชื่อเข้าใช้ด้วย Google]  หรือ  [ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้]
+ *  - เลือกไม่ลงชื่อเข้าใช้แล้ว จะไม่ถามซ้ำในแท็บเดิม (จำไว้ใน sessionStorage
+ *    เพียงว่า "รับทราบคำเตือนแล้ว" เท่านั้น — ไม่ใช่ตัวตนหรือสิทธิ์ใด ๆ)
+ *  - รายการที่บันทึกโดยไม่ลงชื่อเข้าใช้ แก้ไขไม่ได้ (เซิร์ฟเวอร์เป็นผู้ตัดสินเสมอ)
+ *  - ถ้าระบบหลังบ้านยังไม่รองรับ (รุ่นเก่า) หรือผู้ดูแลปิดไว้ จะกลับไปบังคับลงชื่อเข้าใช้แบบเดิม
+ *  - รอบที่ "เวลาที่แสดง" ต่างจาก "เวลารับบันทึกจริง" (เช่น รอบที่ 2 แสดง 11:00–15:00 น.
+ *    แต่รับบันทึกถึง 18:00 น.) — ค่ามาจากเซิร์ฟเวอร์ (displayEndTime / extendedAcceptance)
+ *    หน้าเว็บแสดงเวลาของรอบตาม displayEndTime แต่ "ปิดรับ" และนับถอยหลังตาม endTime เสมอ
+ *    15:00 จึงไม่ทำให้รอบหายหรือปิด และเซิร์ฟเวอร์ยังเป็นผู้ตัดสินจริงทุกครั้งที่บันทึก
  */
 var App = (function () {
   'use strict';
@@ -51,7 +64,8 @@ var App = (function () {
     identity: null,
     serverTime: '',
     // ---- เวอร์ชัน 1.3.0: รอบการนับรถ + นาฬิกาเวลาระบบ ----
-    rounds: [],              // [{roundId, roundNo, roundName, startTime, endTime, startAt, endAt, state}]
+    rounds: [],              // [{roundId, roundNo, roundName, startTime, endTime, startAt, endAt, state,
+                             //   (1.3.3 ไม่บังคับ) displayEndTime, displayEndAt, extendedAcceptance}]
     roundsConfigured: false, // วันงานนี้ตั้งค่ารอบไว้หรือยัง
     selectedRoundId: '',
     serverOffsetMs: 0,       // เวลาเซิร์ฟเวอร์ - เวลาเครื่องผู้ใช้ (มิลลิวินาที)
@@ -86,6 +100,34 @@ var App = (function () {
   /** ข้อความแจ้งเรื่องเบอร์โทรศัพท์ — ใช้ที่เดียวทั้งไฟล์ ให้ตรงกับฝั่งเซิร์ฟเวอร์ */
   var PHONE_MESSAGE =
     'กรุณาตรวจสอบเบอร์โทรศัพท์อีกครั้ง เบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลัก กรุณากรอกข้อมูลใหม่อีกครั้ง';
+
+  /* ---------- เวอร์ชัน 1.3.3: การลงชื่อเข้าใช้ไม่บังคับ ---------- */
+
+  /** คีย์ sessionStorage: "ผู้ใช้รับทราบคำเตือนแล้วและเลือกไม่ลงชื่อเข้าใช้"
+   *  ใช้ตัดสินเพียงว่า "ต้องแสดง popup เตือนอีกหรือไม่" เท่านั้น
+   *  ไม่ใช่ตัวตน ไม่ใช่สิทธิ์ และไม่ถูกส่งไปที่เซิร์ฟเวอร์ */
+  var ANON_ACK_KEY = 'gpvcs.anonAck.v1';
+
+  /** ข้อความเมื่อผู้ใช้พยายามแก้ไขรายการที่บันทึกโดยไม่ลงชื่อเข้าใช้ (ตามข้อกำหนด) */
+  var ANON_EDIT_MESSAGE =
+    'รายการนี้ถูกบันทึกโดยผู้ที่ไม่ได้ลงชื่อเข้าใช้\n' +
+    'จึงไม่สามารถแก้ไขรายการนี้ได้\n' +
+    'กรุณาติดต่อผู้ดูแลระบบ';
+
+  /** ระบบหลังบ้านเปิดให้บันทึกโดยไม่ลงชื่อเข้าใช้หรือไม่ (มากับ getBootstrap -> auth) */
+  function anonymousSubmitSupported() {
+    return !!(state.authConfig && state.authConfig.anonymousSubmit === true);
+  }
+
+  function isAnonAcknowledged() {
+    try { return window.sessionStorage.getItem(ANON_ACK_KEY) === '1'; } catch (e) { return false; }
+  }
+  function setAnonAcknowledged() {
+    try { window.sessionStorage.setItem(ANON_ACK_KEY, '1'); } catch (e) { /* ไม่เป็นไร */ }
+  }
+  function clearAnonAcknowledged() {
+    try { window.sessionStorage.removeItem(ANON_ACK_KEY); } catch (e) { /* ไม่เป็นไร */ }
+  }
 
   /* ================= การนำทางระหว่างหน้า ================= */
   function switchView(name) {
@@ -183,6 +225,9 @@ var App = (function () {
     state.recordWindow = res.recordWindow || null;
     state.authConfig = res.auth || null;
     state.ready = true;
+    // เวอร์ชัน 1.3.3: ข้อความการ์ดลงชื่อเข้าใช้ขึ้นกับว่าระบบหลังบ้านเปิดให้บันทึกโดยไม่ลงชื่อเข้าใช้หรือไม่
+    renderAuthTexts();
+    if (!Auth.getState().signedIn) renderAuthState(Auth.getState());
 
     // เทียบนาฬิกากับเซิร์ฟเวอร์ก่อนเสมอ เพื่อให้รอบและตัวนับถอยหลังถูกต้อง
     syncServerClock(res.serverTime || '');
@@ -454,7 +499,9 @@ var App = (function () {
     var hasEvent = !!currentEvent();
     var signedIn = Auth.isSignedIn();
     var needRound = state.roundsConfigured && !activeRound();
-    btn.title = !signedIn ? 'กดปุ่มเพื่อดูขั้นตอนการลงชื่อเข้าใช้ด้วยบัญชี Google'
+    // เวอร์ชัน 1.3.3: ถ้าบันทึกโดยไม่ลงชื่อเข้าใช้ได้ ไม่ต้องบอกให้ไปลงชื่อเข้าใช้
+    var needSignIn = !signedIn && !anonymousSubmitSupported();
+    btn.title = needSignIn ? 'กดปุ่มเพื่อดูขั้นตอนการลงชื่อเข้าใช้ด้วยบัญชี Google'
       : (!hasEvent ? 'ขณะนี้ยังไม่มีวันงานที่เปิดให้บันทึก — กดปุ่มเพื่อดูรายละเอียด'
       : (needRound ? 'ขณะนี้ไม่มีรอบเปิดรับการนับข้อมูล — กดปุ่มเพื่อดูรายละเอียด' : ''));
   }
@@ -526,6 +573,29 @@ var App = (function () {
     box.textContent = two(p.hh) + ':' + two(p.mm) + ':' + two(p.ss);
   }
 
+  /**
+   * เวอร์ชัน 1.3.3 — รอบนี้รับบันทึกจริงเกินเวลาที่แสดงหรือไม่ (เช่น แสดง 11:00–15:00 แต่รับถึง 18:00)
+   * ใช้ค่าที่เซิร์ฟเวอร์ส่งมาเท่านั้น — ระบบหลังบ้านรุ่นเก่าไม่ส่งค่านี้ จึงทำงานแบบเดิมทุกประการ
+   */
+  function roundExtended(r) {
+    return !!(r && r.extendedAcceptance === true && r.displayEndTime);
+  }
+
+  /** ช่วงเวลาของรอบ "ที่แสดงให้ผู้ใช้เห็น" เช่น "11:00–15:00" (ไม่มี displayEndTime = ใช้ endTime เหมือนเดิม) */
+  function roundTimeText(r) {
+    return r.startTime + '–' + (roundExtended(r) ? r.displayEndTime : r.endTime);
+  }
+
+  /**
+   * เวลาที่รอบ "ปิดรับจริง" (epoch ms) — ใช้กติกาเดียวกับ Backend
+   *   รอบปกติ: ปิดเมื่อถึง endAt ถ้วน (เช่น 11:00:00) — กติกาเดิม
+   *   รอบที่รับบันทึกเกินเวลาที่แสดง: ยังรับวินาทีที่ endAt (18:00:00) และปิดตั้งแต่ 18:00:01
+   * displayEndTime ไม่มีผลต่อการปิดรอบเลย
+   */
+  function roundCloseMs(r, end) {
+    return end + (roundExtended(r) ? 1000 : 0);
+  }
+
   /** คำนวณสถานะรอบจากเวลาเซิร์ฟเวอร์ปัจจุบัน (ใช้กติกาเดียวกับ Backend) */
   function roundStateNow(r) {
     var start = parseServerStamp(r.startAt);
@@ -534,7 +604,7 @@ var App = (function () {
     if (r.status && r.status !== 'Active') return 'INACTIVE';
     var now = serverNow();
     if (now < start) return 'UPCOMING';
-    if (now >= end) return 'CLOSED';
+    if (now >= roundCloseMs(r, end)) return 'CLOSED';
     return 'ACTIVE';
   }
 
@@ -622,7 +692,8 @@ var App = (function () {
       btn.setAttribute('aria-pressed', r.roundId === state.selectedRoundId ? 'true' : 'false');
 
       btn.appendChild(Utils.el('span', 'rb-name', r.roundName || ('รอบที่ ' + r.roundNo)));
-      btn.appendChild(Utils.el('span', 'rb-time', r.startTime + '–' + r.endTime + ' น.'));
+      // 1.3.3: เวลาของรอบตาม displayEndTime (ถ้ามี) — แต่ "ปิดรับ" คือเวลารับบันทึกจริง (endTime) เสมอ
+      btn.appendChild(Utils.el('span', 'rb-time', roundTimeText(r) + ' น.'));
       btn.appendChild(Utils.el('span', 'rb-close', 'ปิดรับ ' + r.endTime + ' น.'));
 
       var badge = Utils.el('span', 'rb-badge', ROUND_STATE_TEXT[st] || st);
@@ -644,7 +715,9 @@ var App = (function () {
     });
 
     if (act) {
-      hint.textContent = 'ระบบเลือก' + (act.roundName || 'รอบที่เปิดอยู่') + ' ให้อัตโนมัติแล้ว';
+      hint.textContent = 'ระบบเลือก' + (act.roundName || 'รอบที่เปิดอยู่') + ' ให้อัตโนมัติแล้ว' +
+        // 1.3.3: บอกชัดว่าเวลาที่แสดงไม่ใช่เวลาปิดรับ (เช่น แสดง 11:00–15:00 แต่รับถึง 18:00)
+        (roundExtended(act) ? ' — ระบบเปิดรับบันทึกข้อมูลได้ถึง ' + act.endTime + ' น.' : '');
       hint.className = 'hint';
     } else {
       // ยังไม่ถึงรอบแรก = ข้อมูลเชิงบอกเวลา ไม่ใช่คำเตือน
@@ -791,12 +864,38 @@ var App = (function () {
     if (force || !field.value.trim()) field.value = st.profile.name;
   }
 
+  /**
+   * ข้อความหัวการ์ดลงชื่อเข้าใช้ (เวอร์ชัน 1.3.3)
+   * ถ้าบันทึกโดยไม่ลงชื่อเข้าใช้ได้ -> บอกว่า "ไม่บังคับ" ด้วยภาษาง่าย ๆ
+   * ถ้าไม่ได้ (ระบบหลังบ้านรุ่นเก่า / ผู้ดูแลปิดไว้) -> ใช้ข้อความเดิม
+   * รองรับทั้ง index.html รุ่นใหม่ (มี id) และรุ่นเดิม (ค้นจากโครงสร้าง)
+   */
+  function renderAuthTexts() {
+    var title = $('#auth-title') || $('#auth-signed-out .card-title');
+    var desc = $('#auth-desc') || $('#auth-signed-out > p.hint:not(#auth-hint)');
+    var optional = anonymousSubmitSupported();
+    if (title) {
+      title.textContent = optional
+        ? 'ลงชื่อเข้าใช้ด้วย Google (ไม่บังคับ)'
+        : 'ลงชื่อเข้าใช้เพื่อบันทึกข้อมูล';
+    }
+    if (desc) {
+      desc.textContent = optional
+        ? 'แนะนำให้ลงชื่อเข้าใช้ เพื่อให้ระบบทราบว่าใครเป็นผู้บันทึก ' +
+          'และแก้ไขข้อมูลของตนเองได้ภายหลัง หากลงชื่อเข้าใช้ไม่ได้ ยังบันทึกข้อมูลได้ตามปกติ'
+        : 'ระบบบันทึกผู้ที่กรอกข้อมูลทุกครั้ง จึงต้องลงชื่อเข้าใช้ด้วยบัญชี Google ก่อน ' +
+          'ใช้ได้ทั้งบัญชี Gmail ทั่วไป และบัญชีของมหาวิทยาลัย';
+    }
+  }
+
   /** อัปเดตการ์ดสถานะการลงชื่อเข้าใช้ */
   function renderAuthState(st) {
     var signedOut = $('#auth-signed-out');
     var signedIn = $('#auth-signed-in');
     var errBox = $('#auth-error');
     var hint = $('#auth-hint');
+
+    renderAuthTexts();
 
     if (st.signedIn && st.profile) {
       signedOut.classList.add('hidden');
@@ -815,20 +914,28 @@ var App = (function () {
           'ระบบยังไม่ได้ตั้งค่าการลงชื่อเข้าใช้ด้วย Google กรุณาติดต่อผู้ดูแลระบบ';
         errBox.classList.remove('hidden');
       } else if (st.error) {
-        hint.textContent = '';
+        // เวอร์ชัน 1.3.3: ลงชื่อเข้าใช้ไม่สำเร็จก็ยังบันทึกได้ — บอกให้ผู้ใช้สบายใจ
+        hint.textContent = anonymousSubmitSupported()
+          ? 'ยังบันทึกข้อมูลได้ตามปกติ โดยกด "บันทึกข้อมูล" ด้านล่าง' : '';
         errBox.textContent = st.error;
         errBox.classList.remove('hidden');
       } else {
         errBox.classList.add('hidden');
         hint.textContent = st.ready
-          ? 'กดปุ่มด้านบนเพื่อลงชื่อเข้าใช้ด้วยบัญชี Google'
+          ? (anonymousSubmitSupported()
+            ? 'กดปุ่มด้านบนเพื่อลงชื่อเข้าใช้ หรือกรอกข้อมูลด้านล่างแล้วกด "บันทึกข้อมูล" ได้เลย'
+            : 'กดปุ่มด้านบนเพื่อลงชื่อเข้าใช้ด้วยบัญชี Google')
           : 'กำลังเตรียมระบบลงชื่อเข้าใช้...';
       }
     }
     // เวอร์ชัน 1.3.2 — เมื่อเพิ่งลงชื่อเข้าใช้สำเร็จ
     if (st.signedIn && st.profile) {
+      // เวอร์ชัน 1.3.3: ลงชื่อเข้าใช้แล้ว -> ล้างการ "รับทราบว่าจะไม่ลงชื่อเข้าใช้"
+      // ถ้าภายหลังการลงชื่อเข้าใช้หมดอายุ ระบบจะถามอีกครั้ง แทนที่จะบันทึกแบบไม่ระบุตัวตนเงียบ ๆ
+      clearAnonAcknowledged();
       logSignInOnce();
       loadMyOwnership(true);
+      notifyLoginChoiceSignedIn();
     } else {
       // ออกจากระบบ -> ล้างข้อมูลความเป็นเจ้าของและโหมดแก้ไขทันที
       if (Object.keys(state.ownedLots).length) {
@@ -838,6 +945,9 @@ var App = (function () {
       }
       try { window.sessionStorage.removeItem(SIGNIN_LOG_KEY); } catch (e) {}
     }
+
+    // เวอร์ชัน 1.3.3: popup เลือกการลงชื่อเข้าใช้เปิดอยู่ -> อัปเดตปุ่ม/ข้อความของ Google ตามสถานะล่าสุด
+    if (loginChoice.open && !(st.signedIn && st.profile)) renderLoginChoiceGsi();
 
     updateSubmitAvailability();
     if (typeof Admin !== 'undefined' && Admin.onAuthChange) Admin.onAuthChange(st);
@@ -1003,6 +1113,13 @@ var App = (function () {
     return !!(p && p.completed);
   }
 
+  /** รายการล่าสุดของลานนี้ (วันงาน+รอบปัจจุบัน) บันทึกโดยไม่ลงชื่อเข้าใช้หรือไม่ (1.3.3)
+   *  ใช้แสดงข้อความเท่านั้น — เซิร์ฟเวอร์ตรวจสิทธิ์การแก้ไขเองทุกครั้ง */
+  function isLotAnonymous(parkingId) {
+    var p = lotProgress(parkingId);
+    return !!(p && p.completed && p.anonymous);
+  }
+
   /** ระบบกำลังติดตามสถานะการกรอกอยู่หรือไม่ (ต้องมีรอบที่เลือกไว้) */
   function progressActive() {
     return !!(state.roundsConfigured && state.selectedRoundId);
@@ -1068,7 +1185,9 @@ var App = (function () {
       capacity: rec.capacity,
       occupancyPercent: rec.occupancyPercent,
       capacityStatus: rec.capacityStatus,
-      lastUpdate: rec.serverTimestamp
+      lastUpdate: rec.serverTimestamp,
+      // เวอร์ชัน 1.3.3 — รายการที่เพิ่งบันทึกโดยไม่ลงชื่อเข้าใช้ (ใช้แสดงข้อความเท่านั้น)
+      anonymous: String(rec.authProvider || '').toUpperCase() === 'ANONYMOUS'
     };
     if (!wasCompleted) {
       state.progress.completed += 1;
@@ -1290,6 +1409,13 @@ var App = (function () {
     if (progressActive() && isLotCompleted(lot.parkingId)) {
       closeList();
 
+      // เวอร์ชัน 1.3.3 — รายการที่บันทึกโดยไม่ลงชื่อเข้าใช้ ไม่มีผู้ใช้ทั่วไปคนใดแก้ไขได้
+      // (ไม่ว่าจะลงชื่อเข้าใช้อยู่หรือไม่ก็ตาม) — แจ้งข้อความตามข้อกำหนดทันที
+      if (isLotAnonymous(lot.parkingId)) {
+        window.alert('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว\n\n' + ANON_EDIT_MESSAGE);
+        return;
+      }
+
       // ยังไม่ได้ลงชื่อเข้าใช้ — ไม่รู้ว่าเป็นของใคร จึงไม่เปิดทางให้แก้ไข
       if (!Auth.isSignedIn() || !Auth.getToken()) {
         window.alert('ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว\n\n' +
@@ -1431,13 +1557,19 @@ var App = (function () {
   function validateForm() {
     clearFormError();
 
+    // เวอร์ชัน 1.3.3: ถ้าระบบหลังบ้านเปิดให้บันทึกโดยไม่ลงชื่อเข้าใช้ได้
+    // ขั้นที่ 1–2 (ความพร้อมของระบบลงชื่อเข้าใช้ / ต้องลงชื่อเข้าใช้) จะไม่ขวางการบันทึก
+    // การเลือกว่าจะลงชื่อเข้าใช้หรือไม่ ทำหลังตรวจข้อมูลครบแล้ว (ดู handleSubmit)
+    // ถ้าไม่รองรับ (ระบบหลังบ้านรุ่นเก่า / ผู้ดูแลปิดไว้) จะทำงานแบบเดิมทุกประการ
+    var loginOptional = anonymousSubmitSupported();
+
     // ---------- ลำดับที่ 1: ระบบลงชื่อเข้าใช้พร้อมใช้งานหรือยัง ----------
     var authState = Auth.getState();
-    if (!authState.configured) {
+    if (!loginOptional && !authState.configured) {
       showFormError('ระบบลงชื่อเข้าใช้ยังไม่ได้ตั้งค่า กรุณาติดต่อผู้ดูแลระบบ');
       return null;
     }
-    if (!authState.ready) {
+    if (!loginOptional && !authState.ready) {
       showFormError('ระบบกำลังเตรียมการลงชื่อเข้าใช้ด้วย Google กรุณารอสักครู่แล้วกดบันทึกอีกครั้ง');
       return null;
     }
@@ -1445,7 +1577,7 @@ var App = (function () {
     // ---------- ลำดับที่ 2: ต้องลงชื่อเข้าใช้ และการลงชื่อต้องยังไม่หมดอายุ ----------
     // (เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นอยู่แล้ว — ตรงนี้เพื่อให้ผู้ใช้รู้เหตุผลทันที)
     var wasSignedIn = Auth.isSignedIn();
-    if (!Auth.getToken()) {   // getToken() จะล้างสถานะให้เองถ้าหมดอายุแล้ว
+    if (!loginOptional && !Auth.getToken()) {   // getToken() จะล้างสถานะให้เองถ้าหมดอายุแล้ว
       showFormError(wasSignedIn
         ? 'การลงชื่อเข้าใช้หมดอายุ กรุณาลงชื่อเข้าใช้ด้วย Google อีกครั้ง'
         : 'กรุณาลงชื่อเข้าใช้ด้วย Google ก่อนบันทึกข้อมูล');
@@ -1492,11 +1624,20 @@ var App = (function () {
     // ชั้นนี้เป็นการช่วยผู้ใช้เท่านั้น เซิร์ฟเวอร์ตรวจซ้ำด้วยข้อมูลจริงในชีตเสมอ
     var pid = $('#f-parking-id').value;
     if (progressActive() && isLotCompleted(pid)) {
+      // เวอร์ชัน 1.3.3 — รายการที่บันทึกโดยไม่ลงชื่อเข้าใช้ แก้ไขไม่ได้
+      if (isLotAnonymous(pid)) {
+        showFormError(ANON_EDIT_MESSAGE.replace(/\n/g, ' '), '#f-parking-search');
+        return null;
+      }
       if (!isLotOwnedByMe(pid)) {
         // ไม่ใช่เจ้าของ — เซิร์ฟเวอร์ปฏิเสธอยู่แล้ว แต่บอกผู้ใช้ตั้งแต่ตรงนี้
-        showFormError('ข้อมูลลานจอดรถนี้ถูกบันทึกโดยบัญชี Google อื่น ' +
-          'คุณไม่มีสิทธิ์แก้ไขข้อมูลรายการนี้ ' +
-          'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล', '#f-parking-search');
+        // (1.3.3: ผู้ที่ยังไม่ได้ลงชื่อเข้าใช้ ได้ข้อความที่ตรงกับสถานการณ์ของตนเอง)
+        showFormError(Auth.getToken()
+          ? 'ข้อมูลลานจอดรถนี้ถูกบันทึกโดยบัญชี Google อื่น ' +
+            'คุณไม่มีสิทธิ์แก้ไขข้อมูลรายการนี้ ' +
+            'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล'
+          : 'ลานนี้บันทึกข้อมูลเรียบร้อยแล้ว ' +
+            'กรุณาเลือกลานจอดรถอื่นที่ยังไม่ได้บันทึกข้อมูล', '#f-parking-search');
         return null;
       }
       if (!(state.editMode && state.editLotId === pid)) {
@@ -1573,7 +1714,7 @@ var App = (function () {
       'วันงาน:   ' + ev.eventName + ' (' + Utils.formatThaiDate(ev.eventDate) + ')'
     ];
     var rd = selectedRound();
-    if (rd) lines.push('รอบ:      ' + (rd.roundName || '') + ' (' + rd.startTime + '–' + rd.endTime + ' น.)');
+    if (rd) lines.push('รอบ:      ' + (rd.roundName || '') + ' (' + roundTimeText(rd) + ' น.)');
     lines.push('จำนวนรถ: ' + Utils.formatNumber(payload.vehicleCount) + ' คัน');
     if (overCapacity) {
       lines.push('');
@@ -1598,6 +1739,9 @@ var App = (function () {
 
     // กรณีที่ 7: กำลังส่งข้อมูลอยู่จริง — ปุ่มถูกปิดไว้แล้ว กันกดซ้ำ/ดับเบิลคลิก
     if (state.submitting) return;
+
+    // เวอร์ชัน 1.3.3: popup เลือกการลงชื่อเข้าใช้ยังเปิดอยู่ — ไม่เริ่มการบันทึกซ้อน
+    if (loginChoice.open) return;
 
     // ตั้งแต่จุดนี้ไป ทุกข้อความที่ส่งผ่าน showFormError จะเด้ง popup ให้ผู้ใช้เห็นด้วย
     state.submitAttempt = true;
@@ -1624,14 +1768,69 @@ var App = (function () {
     }
     if (overCapacity) payload.confirmOverCapacity = true;
 
+    // ------------------------------------------------------------------
+    // เวอร์ชัน 1.3.3 — ตัดสินว่าจะบันทึกแบบลงชื่อเข้าใช้หรือไม่
+    // (ทำหลังตรวจข้อมูลและผู้ใช้ยืนยันแล้ว จึงไม่ต้องกด "บันทึกข้อมูล" ซ้ำอีกครั้ง)
+    // ------------------------------------------------------------------
+    // 1) ลงชื่อเข้าใช้อยู่ -> บันทึกในชื่อบัญชีนี้ทันที (เหมือนเดิม)
+    if (Auth.getToken()) {
+      sendSubmission(payload, 'GOOGLE');
+      return;
+    }
+
+    // 2) ระบบหลังบ้านไม่รองรับการบันทึกโดยไม่ลงชื่อเข้าใช้ -> บังคับลงชื่อเข้าใช้แบบเดิม
+    if (!anonymousSubmitSupported()) {
+      showFormError('กรุณาลงชื่อเข้าใช้ด้วย Google ก่อนบันทึกข้อมูล');
+      Auth.promptSignIn();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      state.submitAttempt = false;
+      return;
+    }
+
+    // 3) การ "แก้ไข" ข้อมูลเดิม ต้องลงชื่อเข้าใช้ด้วยบัญชีเจ้าของรายการเสมอ
+    //    (เซิร์ฟเวอร์ปฏิเสธอยู่แล้ว — ตรงนี้เพื่อบอกเหตุผลให้ผู้ใช้ทันที)
+    if (payload.confirmEdit) {
+      showFormError('การแก้ไขข้อมูลที่บันทึกไว้แล้ว ต้องลงชื่อเข้าใช้ด้วยบัญชี Google ' +
+        'ที่ใช้บันทึกรายการนั้นก่อน');
+      Auth.promptSignIn();
+      state.submitAttempt = false;
+      return;
+    }
+
+    // 4) เคยเลือก "ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้" แล้วในแท็บนี้ -> ไม่ถามซ้ำ
+    if (isAnonAcknowledged()) {
+      sendSubmission(payload, 'ANONYMOUS');
+      return;
+    }
+
+    // 5) ครั้งแรก -> popup ให้เลือก (เลือกแล้วบันทึกต่อทันที)
+    openLoginChoice(payload);
+  }
+
+  /**
+   * ส่งข้อมูลไปบันทึกจริง (แยกออกมาในเวอร์ชัน 1.3.3)
+   * @param payload ข้อมูลที่ตรวจและผู้ใช้ยืนยันแล้ว
+   * @param mode 'GOOGLE' | 'ANONYMOUS' — เป็นเพียง "การเลือกของผู้ใช้"
+   *             เซิร์ฟเวอร์ตัดสินตัวตนจริงจาก ID Token เองเสมอ
+   */
+  function sendSubmission(payload, mode) {
+    var anonymous = (mode === 'ANONYMOUS');
+    var body = Object.assign({}, payload);
+    if (anonymous) body.authMode = 'ANONYMOUS';
+    else delete body.authMode;
+
+    state.submitAttempt = true;
     setSubmitting(true);
-    Api.call('submitRecord', payload)
+    Api.call('submitRecord', body)
       .then(function (res) {
         saveRecorderIfWanted(payload);
         // อัปเดตสถานะลานทันที ไม่ต้องให้ผู้ใช้รีเฟรชหน้าเว็บ
         markLotCompletedLocally(res.record || {});
         // บัญชีที่บันทึกคือบัญชีนี้ จึงเป็นเจ้าของรายการนั้นทันที
-        if (res.record && res.record.parkingId) {
+        // (1.3.3: เฉพาะรายการที่บันทึกด้วยบัญชี Google — รายการที่ไม่ลงชื่อเข้าใช้ไม่มีเจ้าของ)
+        var recordIsGoogle = !!(res.record &&
+          String(res.record.authProvider || '').toUpperCase() !== 'ANONYMOUS');
+        if (res.record && res.record.parkingId && recordIsGoogle && !anonymous) {
           state.ownedLots[res.record.parkingId] = true;
           renderLotList(lastLotQuery);
         }
@@ -1676,16 +1875,173 @@ var App = (function () {
         }
         // เซิร์ฟเวอร์ปฏิเสธเพราะไม่ใช่เจ้าของรายการ (หรือตรวจสิทธิ์ไม่ได้)
         // ให้ออกจากโหมดแก้ไข และซิงก์ทั้งสถานะและสิทธิ์จากของจริงใหม่
-        if (err.errorCode === 'EDIT_NOT_OWNER' || err.errorCode === 'EDIT_OWNER_UNKNOWN') {
+        if (err.errorCode === 'EDIT_NOT_OWNER' || err.errorCode === 'EDIT_OWNER_UNKNOWN' ||
+            err.errorCode === 'EDIT_ANONYMOUS_RECORD') {
           clearEditMode();
           loadRoundProgress();
           loadMyOwnership(true);
+        }
+        // เวอร์ชัน 1.3.3 — เซิร์ฟเวอร์ไม่รับการบันทึกโดยไม่ลงชื่อเข้าใช้แล้ว
+        // (ผู้ดูแลปิดไว้ที่ SYSTEM_CONFIG) -> กลับไปใช้แบบบังคับลงชื่อเข้าใช้ทันที
+        if (anonymous && err.errorCode === 'AUTH_REQUIRED') {
+          if (state.authConfig) state.authConfig.anonymousSubmit = false;
+          clearAnonAcknowledged();
+          renderAuthState(Auth.getState());
         }
       })
       .then(function () {
         setSubmitting(false);
         state.submitAttempt = false;
       });
+  }
+
+  /* ==================================================================
+     เวอร์ชัน 1.3.3 — popup "ยังไม่ได้ลงชื่อเข้าใช้ด้วย Google"
+     ==================================================================
+     แสดงเมื่อกด "บันทึกข้อมูล" ครั้งแรกโดยยังไม่ได้ลงชื่อเข้าใช้
+       [ลงชื่อเข้าใช้ด้วย Google]           -> ลงชื่อเข้าใช้เสร็จแล้วบันทึกต่อให้ทันที
+       [ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้]    -> บันทึกทันที
+     สร้างด้วย JavaScript ทั้งหมด จึงไม่ขึ้นกับว่า index.html เป็นรุ่นใด
+     ปิดได้ด้วยปุ่ม "ยกเลิก" หรือปุ่ม Esc (ไม่ปิดเมื่อแตะพื้นหลัง กันการแตะพลาด)
+  */
+  var loginChoice = { open: false, payload: null, el: null, lastFocus: null };
+
+  function ensureLoginChoiceModal() {
+    if (loginChoice.el) return loginChoice.el;
+
+    var backdrop = Utils.el('div', 'modal-backdrop hidden');
+    backdrop.id = 'login-choice-modal';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-labelledby', 'lcm-title');
+    backdrop.setAttribute('aria-describedby', 'lcm-message');
+
+    var card = Utils.el('div', 'modal-card');
+
+    var icon = Utils.el('div', 'modal-icon', 'i');
+    icon.setAttribute('aria-hidden', 'true');
+    card.appendChild(icon);
+
+    var title = Utils.el('h2', 'modal-title', 'ยังไม่ได้ลงชื่อเข้าใช้ด้วย Google');
+    title.id = 'lcm-title';
+    card.appendChild(title);
+
+    var msg = Utils.el('p', 'modal-message',
+      'การลงชื่อเข้าใช้ช่วยให้ระบบทราบว่าใครเป็นผู้บันทึก ' +
+      'และช่วยให้สามารถแก้ไขข้อมูลของตนเองได้');
+    msg.id = 'lcm-message';
+    card.appendChild(msg);
+
+    // ปุ่มลงชื่อเข้าใช้ทางการของ Google (ข้อความ "ลงชื่อเข้าใช้ด้วย Google")
+    var gsiHost = Utils.el('div', 'gsi-host modal-gsi');
+    gsiHost.id = 'lcm-gsi-button';
+    card.appendChild(gsiHost);
+    var gsiNote = Utils.el('p', 'hint modal-gsi-note hidden');
+    gsiNote.id = 'lcm-gsi-note';
+    gsiNote.setAttribute('aria-live', 'polite');
+    card.appendChild(gsiNote);
+
+    card.appendChild(Utils.el('p', 'modal-or', 'หรือ'));
+
+    var anonBtn = Utils.el('button', 'btn btn-lg btn-anon', 'ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้');
+    anonBtn.type = 'button';
+    anonBtn.id = 'lcm-anon';
+    card.appendChild(anonBtn);
+
+    var cancelBtn = Utils.el('button', 'btn btn-ghost btn-modal-cancel', 'ยกเลิก');
+    cancelBtn.type = 'button';
+    cancelBtn.id = 'lcm-cancel';
+    card.appendChild(cancelBtn);
+
+    backdrop.appendChild(card);
+    document.body.appendChild(backdrop);
+
+    anonBtn.addEventListener('click', chooseAnonymous);
+    cancelBtn.addEventListener('click', function () { closeLoginChoice(true); });
+    backdrop.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeLoginChoice(true);
+      } else if (ev.key === 'Tab') {
+        // วนโฟกัสอยู่ภายใน popup
+        var items = Utils.$$('button, [href], iframe, [tabindex]:not([tabindex="-1"])', card)
+          .filter(function (n) { return !n.disabled && n.offsetParent !== null; });
+        if (!items.length) return;
+        var first = items[0], last = items[items.length - 1];
+        if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+      }
+    });
+
+    loginChoice.el = backdrop;
+    return backdrop;
+  }
+
+  /** วาดปุ่ม Google ใน popup และบอกสถานะ ถ้าลงชื่อเข้าใช้ด้วย Google ไม่ได้ในขณะนี้ */
+  function renderLoginChoiceGsi() {
+    var host = $('#lcm-gsi-button');
+    var note = $('#lcm-gsi-note');
+    if (!host || !note) return;
+    var st = Auth.getState();
+    // วาดได้เมื่อระบบพร้อม และจะถูกวาดใหม่อัตโนมัติเมื่อระบบพร้อมภายหลัง
+    Auth.renderButton(host);
+    var gisAvailable = !!(st.configured && st.ready && window.google &&
+      window.google.accounts && window.google.accounts.id);
+    if (gisAvailable) {
+      note.textContent = '';
+      note.classList.add('hidden');
+    } else {
+      note.textContent = (st.ready || !st.configured)
+        ? 'ขณะนี้ลงชื่อเข้าใช้ด้วย Google ไม่ได้ สามารถดำเนินการต่อโดยไม่ลงชื่อเข้าใช้ได้'
+        : 'กำลังเตรียมปุ่มลงชื่อเข้าใช้ด้วย Google...';
+      note.classList.remove('hidden');
+    }
+  }
+
+  function openLoginChoice(payload) {
+    var modal = ensureLoginChoiceModal();
+    loginChoice.open = true;
+    loginChoice.payload = payload;
+    loginChoice.lastFocus = document.activeElement;
+    modal.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    renderLoginChoiceGsi();
+    var anonBtn = $('#lcm-anon');
+    if (anonBtn) { try { anonBtn.focus(); } catch (e) { /* ไม่เป็นไร */ } }
+  }
+
+  /** @param cancelled true = ผู้ใช้ยกเลิก (ยังไม่บันทึกข้อมูล) */
+  function closeLoginChoice(cancelled) {
+    if (!loginChoice.el) return;
+    loginChoice.el.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    loginChoice.open = false;
+    loginChoice.payload = null;
+    if (cancelled) {
+      state.submitAttempt = false;
+      Utils.toast('ยังไม่ได้บันทึกข้อมูล', 'info');
+      var back = $('#btn-submit');
+      if (back) { try { back.focus(); } catch (e) { /* ไม่เป็นไร */ } }
+    }
+  }
+
+  /** ผู้ใช้เลือก "ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้" -> บันทึกทันที และไม่ถามซ้ำในแท็บนี้ */
+  function chooseAnonymous() {
+    var payload = loginChoice.payload;
+    closeLoginChoice(false);
+    if (!payload) return;
+    setAnonAcknowledged();
+    sendSubmission(payload, 'ANONYMOUS');
+  }
+
+  /** ลงชื่อเข้าใช้สำเร็จระหว่างที่ popup เปิดอยู่ -> บันทึกต่อในชื่อบัญชีนั้นทันที */
+  function notifyLoginChoiceSignedIn() {
+    if (!loginChoice.open || !loginChoice.payload) return;
+    if (!Auth.getToken()) return;
+    var payload = loginChoice.payload;
+    closeLoginChoice(false);
+    Utils.toast('ลงชื่อเข้าใช้แล้ว กำลังบันทึกข้อมูล...', 'success');
+    sendSubmission(payload, 'GOOGLE');
   }
 
   function saveRecorderIfWanted(payload) {
@@ -1734,7 +2090,7 @@ var App = (function () {
     }
     if (nextRound) {
       followup.textContent = 'อย่าลืมบันทึกการนับ' + (nextRound.roundName || 'รอบถัดไป') +
-        ' เวลา ' + nextRound.startTime + '–' + nextRound.endTime + ' น.';
+        ' เวลา ' + roundTimeText(nextRound) + ' น.';
       followup.classList.remove('hidden');
     } else {
       followup.textContent = '';

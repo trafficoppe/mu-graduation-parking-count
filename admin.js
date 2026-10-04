@@ -316,7 +316,9 @@ var Admin = (function () {
       tr.appendChild(tdLot);
       tr.appendChild(Utils.el('td', 'num', Utils.formatNumber(r.vehicleCount)));
       tr.appendChild(Utils.el('td', '', r.recorderName));
-      tr.appendChild(Utils.el('td', '', r.email));
+      // เวอร์ชัน 1.3.3 — รายการที่บันทึกโดยไม่ลงชื่อเข้าใช้ไม่มีอีเมล ให้ผู้ดูแลเห็นชัดว่าเป็นกรณีนี้
+      tr.appendChild(Utils.el('td', '', r.email ||
+        (String(r.authProvider || '').toUpperCase() === 'ANONYMOUS' ? '(ไม่ได้ลงชื่อเข้าใช้)' : '')));
       tr.appendChild(Utils.el('td', '', r.phone || '—'));
       tr.appendChild(Utils.el('td', '', r.note || '—'));
       tbody.appendChild(tr);

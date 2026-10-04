@@ -703,6 +703,53 @@ textarea.input { min-height: 64px; resize: vertical; }
 .combo-list li.lot-done.lot-mine { cursor: pointer; }
 .combo-list li.lot-done.lot-mine:hover { background: #fce9eb; }
 
+/* ---------------- Popup เลือกการลงชื่อเข้าใช้ (เวอร์ชัน 1.3.3) ----------------
+   ออกแบบให้ผู้สูงอายุอ่านง่าย: ตัวอักษรใหญ่ ปุ่มสูงอย่างน้อย 56px เต็มความกว้าง
+   และปุ่ม "ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้" เห็นชัดเจนเท่ากับปุ่มของ Google */
+body.modal-open { overflow: hidden; }
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(16, 26, 54, .55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+.modal-card {
+  width: 100%; max-width: 440px; margin: auto;
+  background: var(--card); color: var(--text);
+  border-radius: 16px; border-top: 6px solid var(--gold);
+  box-shadow: 0 18px 48px rgba(10, 20, 50, .35);
+  padding: 22px 20px 18px; text-align: center;
+}
+.modal-icon {
+  width: 48px; height: 48px; margin: 0 auto 10px; border-radius: 50%;
+  background: var(--warn-bg); color: var(--warn); border: 2px solid #f0dcb0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px; font-weight: 800; font-family: Georgia, "Times New Roman", serif;
+}
+.modal-title { margin: 0 0 8px; font-size: 21px; line-height: 1.35; color: var(--navy-dark); }
+.modal-message { margin: 0 0 6px; font-size: 17px; line-height: 1.6; color: var(--text-soft); }
+.modal-gsi { margin: 16px 0 6px; min-height: 48px; }
+.modal-gsi-note { margin: 4px 0 0; font-size: 15px; }
+.modal-or {
+  display: flex; align-items: center; gap: 12px;
+  margin: 12px 0 4px; font-size: 14px; color: var(--text-soft);
+}
+.modal-or::before, .modal-or::after {
+  content: ""; flex: 1 1 auto; height: 1px; background: var(--border);
+}
+.modal-card .btn-anon {
+  width: 100%; min-width: 0; min-height: 58px; font-size: 18px; line-height: 1.35;
+  background: #e8ecf7; color: var(--navy-dark); border-color: var(--navy);
+  white-space: normal;
+}
+.modal-card .btn-anon:hover { background: #dbe3f6; }
+.modal-card .btn-modal-cancel {
+  width: 100%; min-width: 0; min-height: 46px; margin-top: 10px;
+  font-size: 16px; font-weight: 600; color: var(--text-soft); border-color: transparent;
+}
+.modal-card .btn-modal-cancel:hover { color: var(--navy); }
+
 /* ---------------- Responsive ---------------- */
 /* จอแคบมาก (เช่น 360px) — ปุ่มปีเรียงเต็มความกว้างแทนการบีบจนอ่านยาก */
 @media (max-width: 400px) {

@@ -9,19 +9,27 @@
  *    โค้ดด้านล่างข้ามทุกคำขอที่ไม่ใช่โดเมนของเว็บนี้อยู่แล้ว
  *  - ไม่มี Background Sync / Offline Queue ในเวอร์ชันนี้
  *    ระบบเลือกแจ้งเตือนผู้ใช้ให้กดบันทึกใหม่เมื่อมีสัญญาณ ซึ่งปลอดภัยกว่าการคิวอัตโนมัติ
+ *
+ * เวอร์ชัน 1.3.3:
+ *  - index.html อ้างถึงไฟล์ CSS/JS พร้อมเลขเวอร์ชัน (เช่น app.js?v=1.3.3)
+ *    เมื่ออัปเดตเวอร์ชัน เบราว์เซอร์จึงโหลดไฟล์ชุดใหม่ทั้งชุดพร้อมกัน
+ *    ไม่เกิดกรณีหน้าเว็บใหม่ใช้สคริปต์เก่าค้างจากแคช
+ *  - รายการไฟล์ที่แคชไว้ล่วงหน้าใช้ชื่อเดียวกับที่ index.html เรียกจริง
  */
-var CACHE_NAME = 'gpvcs-shell-v1.3.2';
+var APP_VERSION = '1.3.3';
+var CACHE_NAME = 'gpvcs-shell-v' + APP_VERSION;
+var V = '?v=' + APP_VERSION;
 var SHELL_FILES = [
   './',
   './index.html',
-  './styles.css',
-  './config.js',
-  './utils.js',
-  './auth.js',
-  './api.js',
-  './app.js',
-  './dashboard.js',
-  './admin.js',
+  './styles.css' + V,
+  './config.js' + V,
+  './utils.js' + V,
+  './auth.js' + V,
+  './api.js' + V,
+  './app.js' + V,
+  './dashboard.js' + V,
+  './admin.js' + V,
   './icon.svg',
   './manifest.webmanifest'
 ];

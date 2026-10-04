@@ -27,6 +27,16 @@
  *      เพราะ JSONP ส่งข้อมูลผ่าน query string ซึ่งจะทำให้ ID Token ไปปรากฏใน
  *      URL, log ของพร็อกซี, ประวัติเบราว์เซอร์ และ header Referer
  *      หาก POST ล้มเหลว ระบบจะแจ้งข้อผิดพลาดตรง ๆ ไม่มีการถอยไปใช้ JSONP
+ *
+ * ============================================================================
+ * เวอร์ชัน 1.3.3 — การลงชื่อเข้าใช้ไม่บังคับสำหรับการบันทึกข้อมูล (submitRecord)
+ * ============================================================================
+ *   - ลงชื่อเข้าใช้อยู่  -> แนบ ID Token ใน POST body เหมือนเดิมทุกประการ
+ *   - ผู้ใช้เลือก "ดำเนินการต่อโดยไม่ลงชื่อเข้าใช้" (payload.authMode = 'ANONYMOUS')
+ *                     -> ส่งโดยไม่มี token เลย
+ *   - ไม่มี token และผู้ใช้ไม่ได้เลือก -> ปฏิเสธที่หน้าเว็บ (ไม่บันทึกแบบไม่ระบุตัวตนเอง)
+ *   - การบันทึกข้อมูลส่งทาง POST เท่านั้นทั้งสองแบบ ไม่มี JSONP เพราะมีชื่อ/เบอร์โทรอยู่ในข้อมูล
+ *   หน้าเว็บไม่ใช่ผู้ตัดสินตัวตน — เซิร์ฟเวอร์ตรวจ token เองทุกครั้ง
  */
 var Api = (function () {
   'use strict';
@@ -46,7 +56,7 @@ var Api = (function () {
    * เลือกช่องทางส่งข้อมูลให้ถูกต้องเท่านั้น
    */
   var AUTH_ACTIONS = {
-    submitRecord: true, getMyIdentity: true,
+    getMyIdentity: true,
     // เวอร์ชัน 1.3.2 — ต้องแนบ ID Token (ส่งทาง POST body เท่านั้น)
     getMyRoundOwnership: true, logSignIn: true,
     getHistory: true, getAuditLog: true, getAdminParkingLots: true,
@@ -55,6 +65,14 @@ var Api = (function () {
     updateEventDay: true, createYear: true, setActiveYear: true,
     rebuildSummary: true, getRecordingWindow: true, setRecordingWindow: true,
     setYearStatus: true
+  };
+
+  /**
+   * คำขอที่ "ลงชื่อเข้าใช้หรือไม่ก็ได้" (เวอร์ชัน 1.3.3) — ต้องตรงกับระดับ OPTIONAL ฝั่ง Backend
+   * ส่งทาง POST เท่านั้นเสมอ (ไม่มี JSONP) ไม่ว่าจะลงชื่อเข้าใช้หรือไม่
+   */
+  var OPTIONAL_AUTH_ACTIONS = {
+    submitRecord: true
   };
 
   var lastTransport = '';
@@ -217,7 +235,20 @@ var Api = (function () {
     payload.action = action;
     if (!payload.deviceId) payload.deviceId = Utils.getDeviceId();
 
-    var needsAuth = !!AUTH_ACTIONS[action];
+    var authOptional = !!OPTIONAL_AUTH_ACTIONS[action];
+    // ผู้ใช้เลือกบันทึกโดยไม่ลงชื่อเข้าใช้เอง (เวอร์ชัน 1.3.3) — ไม่แนบ token ใด ๆ
+    var anonymousChosen = authOptional &&
+      String(payload.authMode || '').toUpperCase() === 'ANONYMOUS';
+    if (authOptional) {
+      if (anonymousChosen) {
+        payload.authMode = 'ANONYMOUS';
+        delete payload.idToken;
+      } else {
+        delete payload.authMode;
+      }
+    }
+
+    var needsAuth = !!AUTH_ACTIONS[action] || (authOptional && !anonymousChosen);
     if (needsAuth) {
       // แนบ token จากหน่วยความจำ (ไม่เคยอ่านจาก localStorage หรือ URL)
       var token = (typeof Auth !== 'undefined') ? Auth.getToken() : null;
@@ -228,8 +259,11 @@ var Api = (function () {
       payload.idToken = token;
     }
 
+    // คำขอที่มี token และคำขอแบบลงชื่อเข้าใช้ไม่บังคับ ส่งทาง POST เท่านั้น ห้ามถอยไป JSONP
+    var postOnly = needsAuth || authOptional;
+
     var isWrite = !!WRITE_ACTIONS[action];
-    var primary = (isWrite || needsAuth)
+    var primary = (isWrite || postOnly)
       ? function () { lastTransport = 'POST'; return fetchPost(payload); }
       : function () { lastTransport = 'GET'; return fetchGet(payload); };
 
@@ -250,7 +284,9 @@ var Api = (function () {
         if (err && (err.errorCode === 'PAYLOAD_TOO_LARGE')) throw err;
         // *** คำขอที่มี token ห้ามถอยไปใช้ JSONP เด็ดขาด ***
         // เพราะ token จะไปโผล่ใน URL ยอมให้คำขอล้มเหลวไปเลยดีกว่า
-        if (needsAuth) {
+        // (เวอร์ชัน 1.3.3: การบันทึกแบบไม่ลงชื่อเข้าใช้ก็ห้ามใช้ JSONP เช่นกัน
+        //  เพราะชื่อ-นามสกุลและเบอร์โทรศัพท์จะไปอยู่ใน URL)
+        if (postOnly) {
           throw apiError(
             'ไม่สามารถเชื่อมต่อระบบได้ กรุณาตรวจสอบสัญญาณอินเทอร์เน็ตแล้วลองใหม่',
             'NETWORK_ERROR');
